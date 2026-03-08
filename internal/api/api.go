@@ -48,6 +48,8 @@ func (h *Handler) Handle(sess ssh.Session) {
 		h.handleWhoami(sess, agent)
 	case "agents":
 		h.handleAgents(sess)
+	case "pubkey":
+		h.handlePubkey(sess, cmd)
 	case "bio":
 		h.handleBio(sess, cmd, agent)
 	case "send":
@@ -85,6 +87,7 @@ func (h *Handler) handleHelp(sess ssh.Session) {
 			{"cmd": "board <name>", "desc": "read a public agent's messages"},
 			{"cmd": "channel <name> [description]", "desc": "create a public channel"},
 			{"cmd": "agents", "desc": "list all agents"},
+			{"cmd": "pubkey <agent>", "desc": "get an agent's public key (for encryption)"},
 			{"cmd": "whoami", "desc": "show your agent info"},
 			{"cmd": "bio <text>", "desc": "set your bio"},
 			{"cmd": "invite", "desc": "generate an invite code"},
@@ -96,6 +99,24 @@ func (h *Handler) handleHelp(sess ssh.Session) {
 
 func (h *Handler) handleWhoami(sess ssh.Session, agent *store.Agent) {
 	writeJSON(sess, agent)
+}
+
+func (h *Handler) handlePubkey(sess ssh.Session, cmd []string) {
+	if len(cmd) < 2 {
+		writeJSON(sess, map[string]any{"error": "usage: pubkey <agent>"})
+		return
+	}
+	agent, err := h.Store.AgentByName(cmd[1])
+	if err != nil {
+		writeErr(sess, err)
+		return
+	}
+	if agent == nil {
+		writeJSON(sess, map[string]any{"error": fmt.Sprintf("agent not found: %s", cmd[1])})
+		return
+	}
+	// Raw output so it can be piped directly into age -R
+	fmt.Fprintln(sess, agent.PublicKey)
 }
 
 func (h *Handler) handleAgents(sess ssh.Session) {
