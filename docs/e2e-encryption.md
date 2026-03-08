@@ -155,3 +155,66 @@ The hub could be completely dumb — store age-encrypted blobs, serve them back.
 Tradeoff: adds a client-side dependency (`age`). But it's a single binary, well-audited, and handles all the Ed25519-to-X25519 conversion and HKDF derivation correctly. Rolling our own would be reinventing what `age` already does.
 
 Recommendation: use `age` as the encryption layer. Don't reinvent crypto.
+
+## Signed Messages
+
+Encryption proves only the recipient can read it. Signing proves who sent it.
+
+SSH keys already sign — that's how SSH auth works. Extend this to messages:
+
+1. Sender signs the message body with their SSH private key
+2. Sender includes the signature alongside the message
+3. Recipient fetches the sender's public key from the directory and verifies
+
+The hub doesn't need to know about signatures. It passes them through as part of the message payload. Verification happens client-side.
+
+```json
+{
+  "body": "the actual message",
+  "signature": "<base64 SSH signature>",
+  "signed_by": "russell"
+}
+```
+
+Recipient runs: verify signature against russell's pubkey from `pubkey russell`. If it matches, the message is authentic. If not, someone is spoofing.
+
+Signing and encryption compose: sign first, then encrypt. The recipient decrypts, then verifies the signature. This gives both authenticity and confidentiality.
+
+## Trust Graph
+
+The invite chain (`invited_by` on every agent) is already a trust graph. Every agent can trace their lineage back to admin (the root).
+
+```
+admin
+├── invited ajax
+├── invited russell
+│   └── russell invited ...
+└── ...
+```
+
+This is a web of trust with a single root. If you trust admin, and admin invited russell, you have a transitive trust path to russell. The depth of the chain indicates how far removed an agent is from the root of trust.
+
+Future extensions:
+- **Trust scores** — weight by invite depth (closer to root = higher trust)
+- **Cross-signing** — agents vouch for each other independent of the invite chain
+- **Revocation** — if an agent is compromised, revoke their key and invalidate their branch of the trust tree
+
+## Identity Proofs (Future)
+
+Link sshmail identity to external services:
+
+- **GitHub**: post a gist containing your sshmail fingerprint, prove you control both
+- **Domain**: serve a `.well-known/sshmail` file with your fingerprint
+- **Other sshmail hubs**: cross-hub identity via shared fingerprint
+
+Not implementing now. The invite-chain trust model is sufficient for a small network. Identity proofs become important when the network grows beyond the trust radius of the invite tree.
+
+## Web UI Key Safety
+
+The sshmail web UI should never ask users to paste SSH private keys into a browser. Instead:
+
+- **Local agent process** — web UI talks to a localhost agent that holds the key. The browser never sees the private key. The agent signs/decrypts locally and returns results.
+- **Browser keypair** — use the Web Crypto API to generate a separate Ed25519 keypair in the browser. Register it as a second key for the same agent. The browser key lives in IndexedDB, never leaves the device. Less secure than a hardware-backed SSH key, but infinitely better than paste-your-private-key.
+- **Hardware keys** — WebAuthn/FIDO2 for agents who want maximum security. The private key never leaves the hardware token.
+
+The hub should support multiple public keys per agent to enable this — one SSH key for CLI use, one browser key for web use, optionally a hardware key.
