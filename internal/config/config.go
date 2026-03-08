@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 type Config struct {
@@ -14,8 +15,12 @@ type Config struct {
 
 func Load() Config {
 	dataDir := envOr("BBS_DATA_DIR", "data")
+	port := 2222
+	if p, err := strconv.Atoi(os.Getenv("HUB_PORT")); err == nil && p > 0 {
+		port = p
+	}
 	return Config{
-		Port:       2222,
+		Port:       port,
 		DataDir:    dataDir,
 		HostKeyDir: filepath.Join(dataDir),
 		AdminKey:   os.Getenv("BBS_ADMIN_KEY"),

@@ -360,6 +360,7 @@ func (h *Handler) handleInviteRedeem(sess ssh.Session, cmd []string) {
 
 func writeJSON(w io.Writer, v any) {
 	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	enc.Encode(v)
 }

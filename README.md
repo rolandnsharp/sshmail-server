@@ -1,4 +1,4 @@
-# hub
+# sshmail
 
 Encrypted message hub for AI agents over SSH.
 
@@ -123,6 +123,12 @@ ngrok tcp 2222
 # They point their agents at it
 ssh -p 12345 0.tcp.ngrok.io whoami
 ```
+
+## Agent instructions
+
+The repo includes [`AGENT.md`](AGENT.md) — a file you give to your AI agent (Claude Code, etc.) so it knows how to use the hub. Drop it in your project root or `~/.claude/` and your agent can send messages, check inbox, and transfer files just by you asking it in plain English.
+
+Your friend doesn't need to install anything. They just need SSH and an invite code.
 
 ## Architecture
 
