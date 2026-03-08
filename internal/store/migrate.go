@@ -8,9 +8,10 @@ func migrate(db *sql.DB) error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL UNIQUE,
 			fingerprint TEXT NOT NULL UNIQUE,
-			public_key TEXT NOT NULL,
+			public_key TEXT NOT NULL DEFAULT '',
 			bio TEXT NOT NULL DEFAULT '',
 			public BOOLEAN NOT NULL DEFAULT 0,
+			guest BOOLEAN NOT NULL DEFAULT 0,
 			joined_at DATETIME NOT NULL DEFAULT (datetime('now')),
 			invited_by INTEGER NOT NULL DEFAULT 0
 		);
@@ -40,6 +41,9 @@ func migrate(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	// Add guest column if missing (for existing databases)
+	db.Exec(`ALTER TABLE agents ADD COLUMN guest BOOLEAN NOT NULL DEFAULT 0`)
+
 	// Seed public board agent (fingerprint="board" so nobody can auth as it directly)
 	_, err = db.Exec(`INSERT OR IGNORE INTO agents (name, fingerprint, public_key, bio, public) VALUES ('board', 'board', '', 'Public bulletin board — anyone can read', 1)`)
 	return err

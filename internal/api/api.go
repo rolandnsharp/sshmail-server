@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/charmbracelet/ssh"
 	"github.com/google/uuid"
@@ -19,6 +21,56 @@ import (
 type Handler struct {
 	Store   store.Store
 	DataDir string
+	limiter *rateLimiter
+}
+
+// rateLimiter tracks anonymous send rates per fingerprint
+type rateLimiter struct {
+	mu      sync.Mutex
+	sends   map[string][]time.Time
+	limit   int
+	window  time.Duration
+}
+
+func newRateLimiter(limit int, window time.Duration) *rateLimiter {
+	return &rateLimiter{
+		sends:  make(map[string][]time.Time),
+		limit:  limit,
+		window: window,
+	}
+}
+
+func (r *rateLimiter) allow(fingerprint string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-r.window)
+
+	// Prune old entries
+	times := r.sends[fingerprint]
+	valid := times[:0]
+	for _, t := range times {
+		if t.After(cutoff) {
+			valid = append(valid, t)
+		}
+	}
+
+	if len(valid) >= r.limit {
+		r.sends[fingerprint] = valid
+		return false
+	}
+
+	r.sends[fingerprint] = append(valid, now)
+	return true
+}
+
+func NewHandler(s store.Store, dataDir string) *Handler {
+	return &Handler{
+		Store:   s,
+		DataDir: dataDir,
+		limiter: newRateLimiter(10, time.Hour),
+	}
 }
 
 func (h *Handler) Handle(sess ssh.Session) {
@@ -36,8 +88,20 @@ func (h *Handler) Handle(sess ssh.Session) {
 		return
 	}
 
+	// anonymous send — anyone with an SSH key can send to a registered agent
+	if cmd[0] == "send" && agent == nil {
+		h.handleAnonSend(sess, cmd)
+		return
+	}
+
+	// help is available to everyone
+	if cmd[0] == "help" && agent == nil {
+		h.handleHelp(sess)
+		return
+	}
+
 	if agent == nil {
-		writeJSON(sess, map[string]any{"error": "not authenticated"})
+		writeJSON(sess, map[string]any{"error": "not authenticated — use 'send <agent> <message>' to message someone, or redeem an invite to register"})
 		return
 	}
 
@@ -179,6 +243,55 @@ func (h *Handler) handleSend(sess ssh.Session, cmd []string, agent *store.Agent)
 	}
 
 	id, err := h.Store.SendMessage(agent.ID, to.ID, message, fileName, filePath)
+	if err != nil {
+		writeErr(sess, err)
+		return
+	}
+	writeJSON(sess, map[string]any{"ok": true, "id": id})
+}
+
+func (h *Handler) handleAnonSend(sess ssh.Session, cmd []string) {
+	if len(cmd) < 3 {
+		writeJSON(sess, map[string]any{"error": "usage: send <agent> <message>"})
+		return
+	}
+
+	// Get fingerprint from the SSH session
+	pubKey := sess.PublicKey()
+	if pubKey == nil {
+		writeJSON(sess, map[string]any{"error": "no public key provided"})
+		return
+	}
+	fingerprint := gossh.FingerprintSHA256(pubKey)
+
+	// Rate limit anonymous senders
+	if !h.limiter.allow(fingerprint) {
+		writeJSON(sess, map[string]any{"error": "rate limit exceeded — 10 messages per hour for unregistered senders"})
+		return
+	}
+
+	toName := cmd[1]
+	to, err := h.Store.AgentByName(toName)
+	if err != nil {
+		writeErr(sess, err)
+		return
+	}
+	if to == nil {
+		writeJSON(sess, map[string]any{"error": fmt.Sprintf("agent not found: %s", toName)})
+		return
+	}
+
+	// Build message (no file attachments for anonymous sends)
+	message := strings.Join(cmd[2:], " ")
+
+	// Get or create a guest agent for this fingerprint
+	guest, err := h.Store.GetOrCreateGuest(fingerprint)
+	if err != nil {
+		writeErr(sess, err)
+		return
+	}
+
+	id, err := h.Store.SendMessage(guest.ID, to.ID, message, nil, nil)
 	if err != nil {
 		writeErr(sess, err)
 		return
