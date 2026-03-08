@@ -52,7 +52,7 @@ func main() {
 		seedAdmin(db, cfg.AdminKey)
 	}
 
-	handler := &api.Handler{Store: db, DataDir: cfg.DataDir}
+	handler := api.NewHandler(db, cfg.DataDir)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	srv, err := wish.NewServer(

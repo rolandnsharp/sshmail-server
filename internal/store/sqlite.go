@@ -36,13 +36,13 @@ func (s *SQLiteStore) AgentByFingerprint(fingerprint string) (*Agent, error) {
 	// Look up via agent_keys first (supports multi-key)
 	a := &Agent{}
 	err := s.db.QueryRow(`
-		SELECT a.id, a.name, a.fingerprint, a.public_key, a.bio, a.public, a.joined_at, a.invited_by
+		SELECT a.id, a.name, a.fingerprint, a.public_key, a.bio, a.public, a.guest, a.joined_at, a.invited_by
 		FROM agents a
 		JOIN agent_keys ak ON a.id = ak.agent_id
-		WHERE ak.fingerprint = ?`, fingerprint).Scan(&a.ID, &a.Name, &a.Fingerprint, &a.PublicKey, &a.Bio, &a.Public, &a.JoinedAt, &a.InvitedBy)
+		WHERE ak.fingerprint = ?`, fingerprint).Scan(&a.ID, &a.Name, &a.Fingerprint, &a.PublicKey, &a.Bio, &a.Public, &a.Guest, &a.JoinedAt, &a.InvitedBy)
 	if err == sql.ErrNoRows {
 		// Fall back to agents table for channels/groups/board
-		return s.scanAgent(`SELECT id, name, fingerprint, public_key, bio, public, joined_at, invited_by FROM agents WHERE fingerprint = ?`, fingerprint)
+		return s.scanAgent(`SELECT id, name, fingerprint, public_key, bio, public, guest, joined_at, invited_by FROM agents WHERE fingerprint = ?`, fingerprint)
 	}
 	if err != nil {
 		return nil, err
@@ -51,16 +51,16 @@ func (s *SQLiteStore) AgentByFingerprint(fingerprint string) (*Agent, error) {
 }
 
 func (s *SQLiteStore) AgentByID(id int64) (*Agent, error) {
-	return s.scanAgent(`SELECT id, name, fingerprint, public_key, bio, public, joined_at, invited_by FROM agents WHERE id = ?`, id)
+	return s.scanAgent(`SELECT id, name, fingerprint, public_key, bio, public, guest, joined_at, invited_by FROM agents WHERE id = ?`, id)
 }
 
 func (s *SQLiteStore) AgentByName(name string) (*Agent, error) {
-	return s.scanAgent(`SELECT id, name, fingerprint, public_key, bio, public, joined_at, invited_by FROM agents WHERE name = ?`, name)
+	return s.scanAgent(`SELECT id, name, fingerprint, public_key, bio, public, guest, joined_at, invited_by FROM agents WHERE name = ?`, name)
 }
 
 func (s *SQLiteStore) scanAgent(query string, arg any) (*Agent, error) {
 	a := &Agent{}
-	err := s.db.QueryRow(query, arg).Scan(&a.ID, &a.Name, &a.Fingerprint, &a.PublicKey, &a.Bio, &a.Public, &a.JoinedAt, &a.InvitedBy)
+	err := s.db.QueryRow(query, arg).Scan(&a.ID, &a.Name, &a.Fingerprint, &a.PublicKey, &a.Bio, &a.Public, &a.Guest, &a.JoinedAt, &a.InvitedBy)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -97,7 +97,7 @@ func (s *SQLiteStore) UpdateBio(id int64, bio string) error {
 }
 
 func (s *SQLiteStore) ListAgents() ([]Agent, error) {
-	rows, err := s.db.Query(`SELECT id, name, fingerprint, public_key, bio, public, joined_at, invited_by FROM agents ORDER BY name`)
+	rows, err := s.db.Query(`SELECT id, name, fingerprint, public_key, bio, public, guest, joined_at, invited_by FROM agents ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -105,12 +105,37 @@ func (s *SQLiteStore) ListAgents() ([]Agent, error) {
 	var agents []Agent
 	for rows.Next() {
 		var a Agent
-		if err := rows.Scan(&a.ID, &a.Name, &a.Fingerprint, &a.PublicKey, &a.Bio, &a.Public, &a.JoinedAt, &a.InvitedBy); err != nil {
+		if err := rows.Scan(&a.ID, &a.Name, &a.Fingerprint, &a.PublicKey, &a.Bio, &a.Public, &a.Guest, &a.JoinedAt, &a.InvitedBy); err != nil {
 			return nil, err
 		}
 		agents = append(agents, a)
 	}
 	return agents, rows.Err()
+}
+
+// --- Guest Agents ---
+
+func (s *SQLiteStore) GetOrCreateGuest(fingerprint string) (*Agent, error) {
+	// Check if a guest agent already exists for this fingerprint
+	a, err := s.AgentByFingerprint(fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	if a != nil {
+		return a, nil
+	}
+
+	// Create a guest agent with a short fingerprint-based name
+	name := "guest-" + fingerprint[len("SHA256:"):][:8]
+	res, err := s.db.Exec(
+		`INSERT INTO agents (name, fingerprint, public_key, bio, guest) VALUES (?, ?, '', 'anonymous sender', 1)`,
+		name, fingerprint,
+	)
+	if err != nil {
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	return s.AgentByID(id)
 }
 
 // --- Messages ---

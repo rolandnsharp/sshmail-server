@@ -9,6 +9,7 @@ type Agent struct {
 	PublicKey   string    `json:"-"`
 	Bio         string    `json:"bio,omitempty"`
 	Public      bool      `json:"public,omitempty"`
+	Guest       bool      `json:"guest,omitempty"`
 	JoinedAt    time.Time `json:"joined_at"`
 	InvitedBy   int64     `json:"invited_by,omitempty"`
 }
@@ -48,6 +49,9 @@ type Store interface {
 	CreateChannel(name, bio string) (*Agent, error)
 	UpdateBio(id int64, bio string) error
 	ListAgents() ([]Agent, error)
+
+	// Guest agents (anonymous senders)
+	GetOrCreateGuest(fingerprint string) (*Agent, error)
 
 	// Messages
 	SendMessage(fromID, toID int64, body string, fileName, filePath *string) (int64, error)
