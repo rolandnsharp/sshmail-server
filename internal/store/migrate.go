@@ -37,6 +37,14 @@ func migrate(db *sql.DB) error {
 			PRIMARY KEY (group_id, member_id)
 		);
 
+		CREATE TABLE IF NOT EXISTS agent_keys (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id INTEGER NOT NULL REFERENCES agents(id),
+			fingerprint TEXT NOT NULL UNIQUE,
+			public_key TEXT NOT NULL,
+			added_at DATETIME NOT NULL DEFAULT (datetime('now'))
+		);
+
 		CREATE TABLE IF NOT EXISTS invites (
 			code TEXT PRIMARY KEY,
 			created_by INTEGER NOT NULL REFERENCES agents(id),
@@ -50,5 +58,15 @@ func migrate(db *sql.DB) error {
 	}
 	// Seed public board agent (fingerprint="board" so nobody can auth as it directly)
 	_, err = db.Exec(`INSERT OR IGNORE INTO agents (name, fingerprint, public_key, bio, public) VALUES ('board', 'board', '', 'Public bulletin board — anyone can read', 1)`)
+	if err != nil {
+		return err
+	}
+
+	// Migrate existing agent keys into agent_keys table
+	_, err = db.Exec(`
+		INSERT OR IGNORE INTO agent_keys (agent_id, fingerprint, public_key)
+		SELECT id, fingerprint, public_key FROM agents
+		WHERE public_key != '' AND fingerprint NOT LIKE 'group:%'
+	`)
 	return err
 }

@@ -66,6 +66,10 @@ func (h *Handler) Handle(sess ssh.Session) {
 		h.handleBoard(sess, cmd, agent)
 	case "channel":
 		h.handleChannel(sess, cmd)
+	case "addkey":
+		h.handleAddKey(sess, agent)
+	case "keys":
+		h.handleKeys(sess, agent)
 	case "group":
 		h.handleGroup(sess, cmd, agent)
 	case "invite":
@@ -96,6 +100,8 @@ func (h *Handler) handleHelp(sess ssh.Session) {
 			{"cmd": "pubkey <agent>", "desc": "get an agent's public key (for encryption)"},
 			{"cmd": "whoami", "desc": "show your agent info"},
 			{"cmd": "bio <text>", "desc": "set your bio"},
+			{"cmd": "addkey", "desc": "add an SSH key (pipe pubkey to stdin)"},
+			{"cmd": "keys", "desc": "list your SSH keys"},
 			{"cmd": "invite", "desc": "generate an invite code"},
 			{"cmd": "invite <code> <name>", "desc": "redeem invite (pipe pubkey to stdin)"},
 			{"cmd": "help", "desc": "show this help"},
@@ -145,6 +151,40 @@ func (h *Handler) handleBio(sess ssh.Session, cmd []string, agent *store.Agent) 
 		return
 	}
 	writeJSON(sess, map[string]any{"ok": true})
+}
+
+func (h *Handler) handleAddKey(sess ssh.Session, agent *store.Agent) {
+	pubKeyData, err := io.ReadAll(io.LimitReader(sess, 8192))
+	if err != nil {
+		writeErr(sess, err)
+		return
+	}
+	pubKeyStr := strings.TrimSpace(string(pubKeyData))
+	if pubKeyStr == "" {
+		writeJSON(sess, map[string]any{"error": "pipe your public key to stdin: cat ~/.ssh/id_ed25519.pub | ssh -p 2233 ssh.sshmail.dev addkey"})
+		return
+	}
+	pubKey, _, _, _, err := gossh.ParseAuthorizedKey([]byte(pubKeyStr))
+	if err != nil {
+		writeJSON(sess, map[string]any{"error": fmt.Sprintf("invalid public key: %v", err)})
+		return
+	}
+	fingerprint := gossh.FingerprintSHA256(pubKey)
+
+	if err := h.Store.AddKey(agent.ID, fingerprint, pubKeyStr); err != nil {
+		writeErr(sess, err)
+		return
+	}
+	writeJSON(sess, map[string]any{"ok": true, "fingerprint": fingerprint})
+}
+
+func (h *Handler) handleKeys(sess ssh.Session, agent *store.Agent) {
+	keys, err := h.Store.ListKeys(agent.ID)
+	if err != nil {
+		writeErr(sess, err)
+		return
+	}
+	writeJSON(sess, map[string]any{"keys": keys})
 }
 
 func (h *Handler) handleSend(sess ssh.Session, cmd []string, agent *store.Agent) {

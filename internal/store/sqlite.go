@@ -32,7 +32,21 @@ func (s *SQLiteStore) Close() error { return s.db.Close() }
 // --- Agents ---
 
 func (s *SQLiteStore) AgentByFingerprint(fingerprint string) (*Agent, error) {
-	return s.scanAgent(`SELECT id, name, fingerprint, public_key, bio, public, joined_at, invited_by FROM agents WHERE fingerprint = ?`, fingerprint)
+	// Look up via agent_keys first (supports multi-key)
+	a := &Agent{}
+	err := s.db.QueryRow(`
+		SELECT a.id, a.name, a.fingerprint, a.public_key, a.bio, a.public, a.joined_at, a.invited_by
+		FROM agents a
+		JOIN agent_keys ak ON a.id = ak.agent_id
+		WHERE ak.fingerprint = ?`, fingerprint).Scan(&a.ID, &a.Name, &a.Fingerprint, &a.PublicKey, &a.Bio, &a.Public, &a.JoinedAt, &a.InvitedBy)
+	if err == sql.ErrNoRows {
+		// Fall back to agents table for channels/groups/board
+		return s.scanAgent(`SELECT id, name, fingerprint, public_key, bio, public, joined_at, invited_by FROM agents WHERE fingerprint = ?`, fingerprint)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return a, nil
 }
 
 func (s *SQLiteStore) AgentByID(id int64) (*Agent, error) {
@@ -168,6 +182,49 @@ func (s *SQLiteStore) UnreadCount(agentID int64) (int, error) {
 	return count, err
 }
 
+// --- Keys ---
+
+func (s *SQLiteStore) AddKey(agentID int64, fingerprint, publicKey string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO agent_keys (agent_id, fingerprint, public_key) VALUES (?, ?, ?)`,
+		agentID, fingerprint, publicKey,
+	)
+	return err
+}
+
+func (s *SQLiteStore) RemoveKey(agentID int64, fingerprint string) error {
+	// Don't allow removing the last key
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_keys WHERE agent_id = ?`, agentID).Scan(&count); err != nil {
+		return err
+	}
+	if count <= 1 {
+		return fmt.Errorf("cannot remove last key")
+	}
+	_, err := s.db.Exec(
+		`DELETE FROM agent_keys WHERE agent_id = ? AND fingerprint = ?`,
+		agentID, fingerprint,
+	)
+	return err
+}
+
+func (s *SQLiteStore) ListKeys(agentID int64) ([]AgentKey, error) {
+	rows, err := s.db.Query(`SELECT fingerprint, public_key, added_at FROM agent_keys WHERE agent_id = ? ORDER BY added_at`, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys []AgentKey
+	for rows.Next() {
+		var k AgentKey
+		if err := rows.Scan(&k.Fingerprint, &k.PublicKey, &k.AddedAt); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, rows.Err()
+}
+
 // --- Groups ---
 
 func (s *SQLiteStore) CreateGroup(name, bio string, adminID int64) (*Agent, error) {
@@ -298,6 +355,14 @@ func (s *SQLiteStore) RedeemInvite(code, name, fingerprint, publicKey string) (*
 		return nil, fmt.Errorf("create agent: %w", err)
 	}
 	agentID, _ := res.LastInsertId()
+
+	_, err = tx.Exec(
+		`INSERT INTO agent_keys (agent_id, fingerprint, public_key) VALUES (?, ?, ?)`,
+		agentID, fingerprint, publicKey,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("add key: %w", err)
+	}
 
 	_, err = tx.Exec(`UPDATE invites SET redeemed_by = ?, redeemed_at = datetime('now') WHERE code = ?`, agentID, code)
 	if err != nil {

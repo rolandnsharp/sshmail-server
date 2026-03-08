@@ -26,6 +26,12 @@ type Message struct {
 	ReadAt    *time.Time `json:"read_at,omitempty"`
 }
 
+type AgentKey struct {
+	Fingerprint string    `json:"fingerprint"`
+	PublicKey   string    `json:"public_key"`
+	AddedAt     time.Time `json:"added_at"`
+}
+
 type GroupMember struct {
 	AgentID  int64     `json:"id"`
 	Name     string    `json:"name"`
@@ -49,6 +55,11 @@ type Store interface {
 	GetMessage(id int64) (*Message, error)
 	MarkRead(id int64) error
 	UnreadCount(agentID int64) (int, error)
+
+	// Keys
+	AddKey(agentID int64, fingerprint, publicKey string) error
+	RemoveKey(agentID int64, fingerprint string) error
+	ListKeys(agentID int64) ([]AgentKey, error)
 
 	// Groups
 	CreateGroup(name, bio string, adminID int64) (*Agent, error)
