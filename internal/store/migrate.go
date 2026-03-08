@@ -12,6 +12,7 @@ func migrate(db *sql.DB) error {
 			bio TEXT NOT NULL DEFAULT '',
 			public BOOLEAN NOT NULL DEFAULT 0,
 			guest BOOLEAN NOT NULL DEFAULT 0,
+			accept_anon BOOLEAN NOT NULL DEFAULT 1,
 			joined_at DATETIME NOT NULL DEFAULT (datetime('now')),
 			invited_by INTEGER NOT NULL DEFAULT 0
 		);
@@ -41,8 +42,19 @@ func migrate(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	// Add guest column if missing (for existing databases)
+	// Add columns if missing (for existing databases)
 	db.Exec(`ALTER TABLE agents ADD COLUMN guest BOOLEAN NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE agents ADD COLUMN accept_anon BOOLEAN NOT NULL DEFAULT 1`)
+
+	// Blocks table — agents can block specific fingerprints
+	db.Exec(`CREATE TABLE IF NOT EXISTS blocks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		agent_id INTEGER NOT NULL REFERENCES agents(id),
+		fingerprint TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+		UNIQUE(agent_id, fingerprint)
+	)`)
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_blocks_agent ON blocks(agent_id)`)
 
 	// Seed public board agent (fingerprint="board" so nobody can auth as it directly)
 	_, err = db.Exec(`INSERT OR IGNORE INTO agents (name, fingerprint, public_key, bio, public) VALUES ('board', 'board', '', 'Public bulletin board — anyone can read', 1)`)

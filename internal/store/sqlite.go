@@ -32,20 +32,20 @@ func (s *SQLiteStore) Close() error { return s.db.Close() }
 // --- Agents ---
 
 func (s *SQLiteStore) AgentByFingerprint(fingerprint string) (*Agent, error) {
-	return s.scanAgent(`SELECT id, name, fingerprint, public_key, bio, public, guest, joined_at, invited_by FROM agents WHERE fingerprint = ?`, fingerprint)
+	return s.scanAgent(`SELECT id, name, fingerprint, public_key, bio, public, guest, accept_anon, joined_at, invited_by FROM agents WHERE fingerprint = ?`, fingerprint)
 }
 
 func (s *SQLiteStore) AgentByID(id int64) (*Agent, error) {
-	return s.scanAgent(`SELECT id, name, fingerprint, public_key, bio, public, guest, joined_at, invited_by FROM agents WHERE id = ?`, id)
+	return s.scanAgent(`SELECT id, name, fingerprint, public_key, bio, public, guest, accept_anon, joined_at, invited_by FROM agents WHERE id = ?`, id)
 }
 
 func (s *SQLiteStore) AgentByName(name string) (*Agent, error) {
-	return s.scanAgent(`SELECT id, name, fingerprint, public_key, bio, public, guest, joined_at, invited_by FROM agents WHERE name = ?`, name)
+	return s.scanAgent(`SELECT id, name, fingerprint, public_key, bio, public, guest, accept_anon, joined_at, invited_by FROM agents WHERE name = ?`, name)
 }
 
 func (s *SQLiteStore) scanAgent(query string, arg any) (*Agent, error) {
 	a := &Agent{}
-	err := s.db.QueryRow(query, arg).Scan(&a.ID, &a.Name, &a.Fingerprint, &a.PublicKey, &a.Bio, &a.Public, &a.Guest, &a.JoinedAt, &a.InvitedBy)
+	err := s.db.QueryRow(query, arg).Scan(&a.ID, &a.Name, &a.Fingerprint, &a.PublicKey, &a.Bio, &a.Public, &a.Guest, &a.AcceptAnon, &a.JoinedAt, &a.InvitedBy)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -70,7 +70,7 @@ func (s *SQLiteStore) UpdateBio(id int64, bio string) error {
 }
 
 func (s *SQLiteStore) ListAgents() ([]Agent, error) {
-	rows, err := s.db.Query(`SELECT id, name, fingerprint, public_key, bio, public, guest, joined_at, invited_by FROM agents ORDER BY name`)
+	rows, err := s.db.Query(`SELECT id, name, fingerprint, public_key, bio, public, guest, accept_anon, joined_at, invited_by FROM agents ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func (s *SQLiteStore) ListAgents() ([]Agent, error) {
 	var agents []Agent
 	for rows.Next() {
 		var a Agent
-		if err := rows.Scan(&a.ID, &a.Name, &a.Fingerprint, &a.PublicKey, &a.Bio, &a.Public, &a.Guest, &a.JoinedAt, &a.InvitedBy); err != nil {
+		if err := rows.Scan(&a.ID, &a.Name, &a.Fingerprint, &a.PublicKey, &a.Bio, &a.Public, &a.Guest, &a.AcceptAnon, &a.JoinedAt, &a.InvitedBy); err != nil {
 			return nil, err
 		}
 		agents = append(agents, a)
@@ -109,6 +109,58 @@ func (s *SQLiteStore) GetOrCreateGuest(fingerprint string) (*Agent, error) {
 	}
 	id, _ := res.LastInsertId()
 	return s.AgentByID(id)
+}
+
+// --- Recipient Controls ---
+
+func (s *SQLiteStore) SetAcceptAnon(id int64, accept bool) error {
+	_, err := s.db.Exec(`UPDATE agents SET accept_anon = ? WHERE id = ?`, accept, id)
+	return err
+}
+
+func (s *SQLiteStore) BlockFingerprint(agentID int64, fingerprint string) error {
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO blocks (agent_id, fingerprint) VALUES (?, ?)`,
+		agentID, fingerprint,
+	)
+	return err
+}
+
+func (s *SQLiteStore) UnblockFingerprint(agentID int64, fingerprint string) error {
+	_, err := s.db.Exec(
+		`DELETE FROM blocks WHERE agent_id = ? AND fingerprint = ?`,
+		agentID, fingerprint,
+	)
+	return err
+}
+
+func (s *SQLiteStore) IsBlocked(agentID int64, fingerprint string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM blocks WHERE agent_id = ? AND fingerprint = ?`,
+		agentID, fingerprint,
+	).Scan(&count)
+	return count > 0, err
+}
+
+func (s *SQLiteStore) ListBlocks(agentID int64) ([]Block, error) {
+	rows, err := s.db.Query(
+		`SELECT id, agent_id, fingerprint, created_at FROM blocks WHERE agent_id = ? ORDER BY created_at DESC`,
+		agentID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var blocks []Block
+	for rows.Next() {
+		var b Block
+		if err := rows.Scan(&b.ID, &b.AgentID, &b.Fingerprint, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, b)
+	}
+	return blocks, rows.Err()
 }
 
 // --- Messages ---

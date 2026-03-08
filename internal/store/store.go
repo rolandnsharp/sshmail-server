@@ -10,6 +10,7 @@ type Agent struct {
 	Bio         string    `json:"bio,omitempty"`
 	Public      bool      `json:"public,omitempty"`
 	Guest       bool      `json:"guest,omitempty"`
+	AcceptAnon  bool      `json:"accept_anon,omitempty"`
 	JoinedAt    time.Time `json:"joined_at"`
 	InvitedBy   int64     `json:"invited_by,omitempty"`
 }
@@ -27,6 +28,13 @@ type Message struct {
 	ReadAt    *time.Time `json:"read_at,omitempty"`
 }
 
+type Block struct {
+	ID          int64     `json:"id"`
+	AgentID     int64     `json:"-"`
+	Fingerprint string    `json:"fingerprint"`
+	CreatedAt   time.Time `json:"blocked_at"`
+}
+
 type Store interface {
 	// Agents
 	AgentByFingerprint(fingerprint string) (*Agent, error)
@@ -38,6 +46,13 @@ type Store interface {
 
 	// Guest agents (anonymous senders)
 	GetOrCreateGuest(fingerprint string) (*Agent, error)
+
+	// Recipient controls
+	SetAcceptAnon(id int64, accept bool) error
+	BlockFingerprint(agentID int64, fingerprint string) error
+	UnblockFingerprint(agentID int64, fingerprint string) error
+	IsBlocked(agentID int64, fingerprint string) (bool, error)
+	ListBlocks(agentID int64) ([]Block, error)
 
 	// Messages
 	SendMessage(fromID, toID int64, body string, fileName, filePath *string) (int64, error)

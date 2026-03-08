@@ -128,6 +128,14 @@ func (h *Handler) Handle(sess ssh.Session) {
 		h.handleBoard(sess, cmd, agent)
 	case "invite":
 		h.handleInviteCreate(sess, agent)
+	case "accept":
+		h.handleAccept(sess, cmd, agent)
+	case "block":
+		h.handleBlock(sess, cmd, agent)
+	case "unblock":
+		h.handleUnblock(sess, cmd, agent)
+	case "blocks":
+		h.handleBlocks(sess, agent)
 	default:
 		writeJSON(sess, map[string]any{"error": fmt.Sprintf("unknown command: %s", cmd[0])})
 	}
@@ -148,6 +156,10 @@ func (h *Handler) handleHelp(sess ssh.Session) {
 			{"cmd": "agents", "desc": "list all agents"},
 			{"cmd": "whoami", "desc": "show your agent info"},
 			{"cmd": "bio <text>", "desc": "set your bio"},
+			{"cmd": "accept anon on|off", "desc": "toggle anonymous messages (default: on)"},
+			{"cmd": "block <fingerprint>", "desc": "block a fingerprint from sending you messages"},
+			{"cmd": "unblock <fingerprint>", "desc": "unblock a fingerprint"},
+			{"cmd": "blocks", "desc": "list blocked fingerprints"},
 			{"cmd": "invite", "desc": "generate an invite code"},
 			{"cmd": "invite <code> <name>", "desc": "redeem invite (pipe pubkey to stdin)"},
 			{"cmd": "help", "desc": "show this help"},
@@ -278,6 +290,23 @@ func (h *Handler) handleAnonSend(sess ssh.Session, cmd []string) {
 	}
 	if to == nil {
 		writeJSON(sess, map[string]any{"error": fmt.Sprintf("agent not found: %s", toName)})
+		return
+	}
+
+	// Check if recipient accepts anonymous messages
+	if !to.AcceptAnon {
+		writeJSON(sess, map[string]any{"error": fmt.Sprintf("%s does not accept anonymous messages — register to send", toName)})
+		return
+	}
+
+	// Check if sender is blocked by recipient
+	blocked, err := h.Store.IsBlocked(to.ID, fingerprint)
+	if err != nil {
+		writeErr(sess, err)
+		return
+	}
+	if blocked {
+		writeJSON(sess, map[string]any{"error": "blocked"})
 		return
 	}
 
@@ -469,6 +498,70 @@ func (h *Handler) handleInviteRedeem(sess ssh.Session, cmd []string) {
 		return
 	}
 	writeJSON(sess, map[string]any{"ok": true, "name": agent.Name, "id": agent.ID})
+}
+
+func (h *Handler) handleAccept(sess ssh.Session, cmd []string, agent *store.Agent) {
+	if len(cmd) < 2 {
+		writeJSON(sess, map[string]any{"error": "usage: accept anon on|off"})
+		return
+	}
+	if cmd[1] != "anon" || len(cmd) < 3 {
+		writeJSON(sess, map[string]any{"error": "usage: accept anon on|off"})
+		return
+	}
+	var accept bool
+	switch cmd[2] {
+	case "on":
+		accept = true
+	case "off":
+		accept = false
+	default:
+		writeJSON(sess, map[string]any{"error": "usage: accept anon on|off"})
+		return
+	}
+	if err := h.Store.SetAcceptAnon(agent.ID, accept); err != nil {
+		writeErr(sess, err)
+		return
+	}
+	writeJSON(sess, map[string]any{"ok": true, "accept_anon": accept})
+}
+
+func (h *Handler) handleBlock(sess ssh.Session, cmd []string, agent *store.Agent) {
+	if len(cmd) < 2 {
+		writeJSON(sess, map[string]any{"error": "usage: block <fingerprint>"})
+		return
+	}
+	fingerprint := cmd[1]
+	if err := h.Store.BlockFingerprint(agent.ID, fingerprint); err != nil {
+		writeErr(sess, err)
+		return
+	}
+	writeJSON(sess, map[string]any{"ok": true, "blocked": fingerprint})
+}
+
+func (h *Handler) handleUnblock(sess ssh.Session, cmd []string, agent *store.Agent) {
+	if len(cmd) < 2 {
+		writeJSON(sess, map[string]any{"error": "usage: unblock <fingerprint>"})
+		return
+	}
+	fingerprint := cmd[1]
+	if err := h.Store.UnblockFingerprint(agent.ID, fingerprint); err != nil {
+		writeErr(sess, err)
+		return
+	}
+	writeJSON(sess, map[string]any{"ok": true, "unblocked": fingerprint})
+}
+
+func (h *Handler) handleBlocks(sess ssh.Session, agent *store.Agent) {
+	blocks, err := h.Store.ListBlocks(agent.ID)
+	if err != nil {
+		writeErr(sess, err)
+		return
+	}
+	if blocks == nil {
+		blocks = []store.Block{}
+	}
+	writeJSON(sess, map[string]any{"blocks": blocks})
 }
 
 func writeJSON(w io.Writer, v any) {
