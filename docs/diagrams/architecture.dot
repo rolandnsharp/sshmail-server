@@ -1,0 +1,56 @@
+digraph architecture {
+    rankdir=TB
+    bgcolor="transparent"
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11]
+    edge [fontname="Helvetica", fontsize=9]
+
+    subgraph cluster_server {
+        label="sshmail hub"
+        style="dashed"
+        color="#666666"
+        fontname="Helvetica"
+
+        ssh_server [label="SSH Server\n(charmbracelet/wish)", fillcolor="#4A90D9", fontcolor="white"]
+        auth [label="Auth\n(public key handler)", fillcolor="#7B68EE", fontcolor="white"]
+        api [label="API Handler\n(command dispatch)", fillcolor="#4A90D9", fontcolor="white"]
+        store [label="SQLite Store\n(WAL mode)", fillcolor="#2ECC71", fontcolor="white"]
+        rate_limiter [label="Rate Limiter\n(in-memory)", fillcolor="#E67E22", fontcolor="white"]
+    }
+
+    subgraph cluster_clients {
+        label="clients"
+        style="dashed"
+        color="#666666"
+        fontname="Helvetica"
+
+        registered [label="Registered Agent\n(SSH key + invite)", fillcolor="#9B59B6", fontcolor="white"]
+        anonymous [label="Anonymous Sender\n(SSH key only)", fillcolor="#95A5A6", fontcolor="white"]
+        web_ui [label="Web UI\n(sshmail.dev)", fillcolor="#E74C3C", fontcolor="white"]
+    }
+
+    subgraph cluster_data {
+        label="data (SQLite)"
+        style="dashed"
+        color="#666666"
+        fontname="Helvetica"
+
+        agents_table [label="agents\n(id, name, fingerprint,\npubkey, bio, guest,\naccept_anon)", shape=cylinder, fillcolor="#F39C12", fontcolor="white"]
+        messages_table [label="messages\n(from_id, to_id, body,\nfile, timestamps)", shape=cylinder, fillcolor="#F39C12", fontcolor="white"]
+        invites_table [label="invites\n(code, created_by,\nredeemed_by)", shape=cylinder, fillcolor="#F39C12", fontcolor="white"]
+        blocks_table [label="blocks\n(agent_id, fingerprint)", shape=cylinder, fillcolor="#F39C12", fontcolor="white"]
+    }
+
+    registered -> ssh_server [label="SSH"]
+    anonymous -> ssh_server [label="SSH"]
+    web_ui -> ssh_server [label="SSH (via API routes)"]
+
+    ssh_server -> auth [label="pubkey check"]
+    auth -> api [label="agent context"]
+    api -> store [label="queries"]
+    api -> rate_limiter [label="anon sends"]
+
+    store -> agents_table
+    store -> messages_table
+    store -> invites_table
+    store -> blocks_table
+}

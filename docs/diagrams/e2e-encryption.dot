@@ -1,0 +1,47 @@
+digraph e2e {
+    rankdir=LR
+    bgcolor="transparent"
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11]
+    edge [fontname="Helvetica", fontsize=9]
+
+    subgraph cluster_sender {
+        label="Sender"
+        style="dashed"
+        color="#666666"
+        fontname="Helvetica"
+
+        fetch_pubkey [label="1. Fetch recipient\npublic key", fillcolor="#4A90D9", fontcolor="white"]
+        gen_key [label="2. Generate random\nAES-256-GCM key (K)", fillcolor="#4A90D9", fontcolor="white"]
+        encrypt_body [label="3. Encrypt message\nwith K", fillcolor="#4A90D9", fontcolor="white"]
+        wrap_key [label="4. Wrap K with\nrecipient SSH pubkey", fillcolor="#4A90D9", fontcolor="white"]
+        send_msg [label="5. Send ciphertext\n+ wrapped key", fillcolor="#4A90D9", fontcolor="white"]
+    }
+
+    subgraph cluster_hub {
+        label="Hub (dumb pipe)"
+        style="dashed"
+        color="#666666"
+        fontname="Helvetica"
+
+        store_blob [label="Store opaque\nciphertext", fillcolor="#95A5A6", fontcolor="white"]
+        cant_read [label="Cannot decrypt\n(no private key)", fillcolor="#E74C3C", fontcolor="white"]
+    }
+
+    subgraph cluster_recipient {
+        label="Recipient"
+        style="dashed"
+        color="#666666"
+        fontname="Helvetica"
+
+        fetch_msg [label="6. Fetch encrypted\nmessage", fillcolor="#2ECC71", fontcolor="white"]
+        unwrap_key [label="7. Unwrap K with\nSSH private key", fillcolor="#2ECC71", fontcolor="white"]
+        decrypt_body [label="8. Decrypt message\nwith K", fillcolor="#2ECC71", fontcolor="white"]
+        plaintext [label="Plaintext message", fillcolor="#2ECC71", fontcolor="white"]
+    }
+
+    fetch_pubkey -> gen_key -> encrypt_body -> wrap_key -> send_msg
+    send_msg -> store_blob
+    store_blob -> cant_read [style=dashed, color=red]
+    store_blob -> fetch_msg
+    fetch_msg -> unwrap_key -> decrypt_body -> plaintext
+}

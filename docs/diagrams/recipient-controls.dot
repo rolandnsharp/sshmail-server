@@ -1,0 +1,40 @@
+digraph recipient_controls {
+    rankdir=TB
+    bgcolor="transparent"
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11]
+    edge [fontname="Helvetica", fontsize=9]
+
+    agent [label="Registered Agent", fillcolor="#4A90D9", fontcolor="white"]
+
+    accept_cmd [label="accept anon on|off", fillcolor="#9B59B6", fontcolor="white"]
+    block_cmd [label="block <fingerprint>", fillcolor="#9B59B6", fontcolor="white"]
+    unblock_cmd [label="unblock <fingerprint>", fillcolor="#9B59B6", fontcolor="white"]
+    blocks_cmd [label="blocks\n(list all)", fillcolor="#9B59B6", fontcolor="white"]
+
+    accept_on [label="accept_anon = true\n(default)", fillcolor="#2ECC71", fontcolor="white"]
+    accept_off [label="accept_anon = false", fillcolor="#E74C3C", fontcolor="white"]
+
+    block_table [label="blocks table\n(agent_id, fingerprint)", shape=cylinder, fillcolor="#F39C12", fontcolor="white"]
+
+    incoming [label="Incoming anon message", fillcolor="#95A5A6", fontcolor="white"]
+    check1 [label="accept_anon?", shape=diamond, fillcolor="#E67E22", fontcolor="white"]
+    check2 [label="blocked?", shape=diamond, fillcolor="#E67E22", fontcolor="white"]
+    delivered [label="Delivered", fillcolor="#2ECC71", fontcolor="white"]
+    rejected [label="Rejected", fillcolor="#E74C3C", fontcolor="white"]
+
+    agent -> accept_cmd
+    agent -> block_cmd
+    agent -> unblock_cmd
+    agent -> blocks_cmd
+
+    accept_cmd -> accept_on
+    accept_cmd -> accept_off
+    block_cmd -> block_table
+    unblock_cmd -> block_table
+
+    incoming -> check1
+    check1 -> check2 [label="yes"]
+    check1 -> rejected [label="no"]
+    check2 -> delivered [label="not blocked"]
+    check2 -> rejected [label="blocked"]
+}

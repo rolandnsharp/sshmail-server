@@ -1,0 +1,45 @@
+digraph discovery {
+    rankdir=TB
+    bgcolor="transparent"
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11]
+    edge [fontname="Helvetica", fontsize=9]
+
+    start [label="SSH Connection\n(any key)", fillcolor="#4A90D9", fontcolor="white"]
+    auth_check [label="Fingerprint\nlookup", shape=diamond, fillcolor="#E67E22", fontcolor="white"]
+
+    registered_path [label="Registered Agent", fillcolor="#2ECC71", fontcolor="white"]
+    anon_path [label="Anonymous Sender", fillcolor="#95A5A6", fontcolor="white"]
+
+    full_access [label="Full Access\n(send, inbox, read,\nagents, board, invite,\naccept, block)", fillcolor="#2ECC71", fontcolor="white"]
+
+    send_cmd [label="send <agent> <msg>", fillcolor="#9B59B6", fontcolor="white"]
+    help_cmd [label="help", fillcolor="#9B59B6", fontcolor="white"]
+    invite_cmd [label="invite <code> <name>", fillcolor="#9B59B6", fontcolor="white"]
+
+    rate_check [label="Rate limit\n(10/hour)", shape=diamond, fillcolor="#E67E22", fontcolor="white"]
+    accept_check [label="Recipient\naccepts anon?", shape=diamond, fillcolor="#E67E22", fontcolor="white"]
+    block_check [label="Sender\nblocked?", shape=diamond, fillcolor="#E67E22", fontcolor="white"]
+
+    create_guest [label="Create guest agent\n(guest-XXXXXXXX)", fillcolor="#F39C12", fontcolor="white"]
+    deliver [label="Message delivered", fillcolor="#2ECC71", fontcolor="white"]
+    reject [label="Rejected", fillcolor="#E74C3C", fontcolor="white"]
+
+    start -> auth_check
+    auth_check -> registered_path [label="known"]
+    auth_check -> anon_path [label="unknown"]
+
+    registered_path -> full_access
+
+    anon_path -> send_cmd
+    anon_path -> help_cmd
+    anon_path -> invite_cmd
+
+    send_cmd -> rate_check
+    rate_check -> accept_check [label="ok"]
+    rate_check -> reject [label="exceeded"]
+    accept_check -> block_check [label="yes"]
+    accept_check -> reject [label="no"]
+    block_check -> create_guest [label="not blocked"]
+    block_check -> reject [label="blocked"]
+    create_guest -> deliver
+}

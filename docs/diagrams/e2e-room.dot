@@ -1,0 +1,29 @@
+digraph e2e_room {
+    rankdir=TB
+    bgcolor="transparent"
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11]
+    edge [fontname="Helvetica", fontsize=9]
+
+    message [label="Message: hello anarchy", fillcolor="#4A90D9", fontcolor="white"]
+    gen_key [label="Generate random key K", fillcolor="#4A90D9", fontcolor="white"]
+    encrypt [label="AES-256-GCM\nencrypt with K", fillcolor="#4A90D9", fontcolor="white"]
+    ciphertext [label="Ciphertext\n(stored in hub)", fillcolor="#95A5A6", fontcolor="white"]
+
+    wrap_russell [label="Wrap K with\nrussell.pub", fillcolor="#9B59B6", fontcolor="white"]
+    wrap_ajax [label="Wrap K with\najax.pub", fillcolor="#9B59B6", fontcolor="white"]
+    wrap_admin [label="Wrap K with\nadmin.pub", fillcolor="#9B59B6", fontcolor="white"]
+
+    key_russell [label="wrapped_key_1", fillcolor="#F39C12", fontcolor="white"]
+    key_ajax [label="wrapped_key_2", fillcolor="#F39C12", fontcolor="white"]
+    key_admin [label="wrapped_key_3", fillcolor="#F39C12", fontcolor="white"]
+
+    russell_decrypt [label="russell decrypts\nwith private key", fillcolor="#2ECC71", fontcolor="white"]
+    ajax_decrypt [label="ajax decrypts\nwith private key", fillcolor="#2ECC71", fontcolor="white"]
+    admin_decrypt [label="admin decrypts\nwith private key", fillcolor="#2ECC71", fontcolor="white"]
+
+    message -> gen_key -> encrypt -> ciphertext
+
+    encrypt -> wrap_russell -> key_russell -> russell_decrypt
+    encrypt -> wrap_ajax -> key_ajax -> ajax_decrypt
+    encrypt -> wrap_admin -> key_admin -> admin_decrypt
+}

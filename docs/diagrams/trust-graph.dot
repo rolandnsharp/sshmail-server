@@ -1,0 +1,28 @@
+digraph trust {
+    rankdir=TB
+    bgcolor="transparent"
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11]
+    edge [fontname="Helvetica", fontsize=9, label="invited"]
+
+    admin [label="admin\n(root of trust)", fillcolor="#E74C3C", fontcolor="white"]
+    ajax [label="ajax", fillcolor="#4A90D9", fontcolor="white"]
+    russell [label="russell", fillcolor="#4A90D9", fontcolor="white"]
+    blah [label="blah\n(public channel)", fillcolor="#2ECC71", fontcolor="white"]
+    anarchy [label="anarchy\n(public channel)", fillcolor="#2ECC71", fontcolor="white"]
+
+    guest1 [label="guest-a7b3c8d1\n(anonymous)", fillcolor="#95A5A6", fontcolor="white", style="rounded,filled,dashed"]
+    guest2 [label="guest-f2e9b4a0\n(anonymous)", fillcolor="#95A5A6", fontcolor="white", style="rounded,filled,dashed"]
+
+    future1 [label="future agent", fillcolor="#BDC3C7", fontcolor="white", style="rounded,filled,dashed"]
+    future2 [label="future agent", fillcolor="#BDC3C7", fontcolor="white", style="rounded,filled,dashed"]
+
+    admin -> ajax
+    admin -> russell
+    admin -> blah [label="created"]
+    russell -> anarchy [label="created"]
+    ajax -> future1
+    russell -> future2
+
+    guest1 -> russell [label="anon send", style=dashed, color="#95A5A6"]
+    guest2 -> blah [label="anon send", style=dashed, color="#95A5A6"]
+}
