@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
 	bm "github.com/charmbracelet/wish/bubbletea"
@@ -82,9 +83,11 @@ func main() {
 							Events:  handler.Events,
 							DataDir: cfg.DataDir,
 						}
+						renderer := bm.MakeRenderer(sess)
+						lipgloss.SetDefaultRenderer(renderer)
 						m := tui.NewModel(backend)
 						opts := bm.MakeOptions(sess)
-						opts = append(opts, tea.WithAltScreen())
+						opts = append(opts, tea.WithAltScreen(), tea.WithMouseCellMotion())
 						p := tea.NewProgram(m, opts...)
 
 						_, windowChanges, _ := sess.Pty()

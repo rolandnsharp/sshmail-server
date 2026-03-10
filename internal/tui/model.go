@@ -188,9 +188,23 @@ func NewModel(backend Backend) Model {
 	delegate.ShowDescription = false
 	delegate.SetHeight(1)
 	delegate.SetSpacing(0)
+	delegate.Styles.SelectedTitle = lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(accent).
+		Foreground(accent).
+		Background(bgHighlight).
+		Bold(true).
+		Padding(0, 0, 0, 1)
+	delegate.Styles.NormalTitle = lipgloss.NewStyle().
+		Foreground(textBright).
+		Padding(0, 0, 0, 2)
 	sidebar := list.New([]list.Item{}, delegate, 0, 0)
 	sidebar.SetShowTitle(true)
 	sidebar.Title = "sshmail"
+	sidebar.Styles.Title = lipgloss.NewStyle().
+		Foreground(accent).
+		Bold(true).
+		Padding(0, 1)
 	sidebar.SetShowStatusBar(false)
 	sidebar.SetShowHelp(false)
 	sidebar.SetFilteringEnabled(false)
@@ -203,9 +217,12 @@ func NewModel(backend Backend) Model {
 
 	vp := viewport.New(0, 0)
 
+	input.Focus()
+	sidebar.SetDelegate(dimDelegate())
+
 	return Model{
 		backend:  backend,
-		focus:    focusSidebar,
+		focus:    focusInput,
 		sidebar:  sidebar,
 		viewport: vp,
 		input:    input,
@@ -217,6 +234,7 @@ func NewModel(backend Backend) Model {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
+		m.input.Focus(),
 		m.fetchWhoami,
 		m.fetchAgents,
 		m.fetchInbox,
@@ -257,17 +275,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateLayout()
 		return m, nil
 
+	case tea.MouseMsg:
+		if msg.Action != tea.MouseActionPress {
+			break
+		}
+		sidebarWidth := m.width * 35 / 100
+		if sidebarWidth < 20 {
+			sidebarWidth = 20
+		}
+		if sidebarWidth > 40 {
+			sidebarWidth = 40
+		}
+		if msg.X > sidebarWidth {
+			m.focus = focusInput
+			cmd := m.input.Focus()
+			m.sidebar.SetDelegate(dimDelegate())
+			return m, cmd
+		} else {
+			m.focus = focusSidebar
+			m.input.Blur()
+			m.sidebar.SetDelegate(activeDelegate())
+		}
+
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c", "q":
-			if m.focus == focusSidebar {
-				return m, tea.Quit
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc":
+			if m.focus == focusInput {
+				m.focus = focusSidebar
+				m.input.Blur()
+				m.sidebar.SetDelegate(activeDelegate())
+				return m, nil
 			}
+			return m, tea.Quit
 		case "tab":
 			if m.focus == focusSidebar {
 				m.focus = focusInput
-				m.input.Focus()
+				cmd := m.input.Focus()
 				m.sidebar.SetDelegate(dimDelegate())
+				return m, cmd
 			} else {
 				m.focus = focusSidebar
 				m.input.Blur()
@@ -293,19 +340,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			// Sidebar: select channel (skip headers)
+			// Enter on sidebar switches to input for the selected channel
 			if item, ok := m.sidebar.SelectedItem().(channelItem); ok && item.kind != "header" && item.kind != "file" && item.kind != "hint" {
-				m.selected = item.name
-				m.selKind = item.kind
-				m.status = fmt.Sprintf("loading %s...", item.name)
-				return m, m.fetchChannel(item)
-			}
-		case "esc":
-			if m.focus == focusInput {
-				m.focus = focusSidebar
-				m.input.Blur()
-				m.sidebar.SetDelegate(activeDelegate())
-				return m, nil
+				m.focus = focusInput
+				cmd := m.input.Focus()
+				m.sidebar.SetDelegate(dimDelegate())
+				return m, cmd
 			}
 		}
 
@@ -313,6 +353,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.sidebar, cmd = m.sidebar.Update(msg)
 			cmds = append(cmds, cmd)
+			// Load channel as user navigates
+			if fetchCmd := m.syncSelection(); fetchCmd != nil {
+				cmds = append(cmds, fetchCmd)
+			}
 		} else {
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
@@ -387,6 +431,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.viewport, vpCmd = m.viewport.Update(msg)
 	cmds = append(cmds, vpCmd)
 
+	// Always update textarea so cursor blink ticks are processed
+	if m.focus == focusInput {
+		var inputCmd tea.Cmd
+		m.input, inputCmd = m.input.Update(msg)
+		cmds = append(cmds, inputCmd)
+	}
+
 	return m, tea.Batch(cmds...)
 }
 
@@ -435,16 +486,33 @@ func (m Model) View() string {
 	)
 }
 
+// syncSelection loads the channel matching the current sidebar highlight.
+// Returns a fetch command if the selection changed, nil otherwise.
+func (m *Model) syncSelection() tea.Cmd {
+	item, ok := m.sidebar.SelectedItem().(channelItem)
+	if !ok || item.kind == "header" || item.kind == "file" || item.kind == "hint" {
+		return nil
+	}
+	if item.name == m.selected && item.kind == m.selKind {
+		return nil
+	}
+	m.selected = item.name
+	m.selKind = item.kind
+	m.status = fmt.Sprintf("loading %s...", item.name)
+	return m.fetchChannel(item)
+}
+
 func (m Model) helpText() string {
+	sep := " · "
 	if m.focus == focusInput {
-		return helpKeyStyle.Render("enter") + " send  " +
-			helpKeyStyle.Render("esc") + " back to sidebar  " +
+		return helpKeyStyle.Render("enter") + " send" + sep +
+			helpKeyStyle.Render("esc") + " sidebar" + sep +
 			helpKeyStyle.Render("ctrl+c") + " quit"
 	}
-	return helpKeyStyle.Render("↑↓") + " navigate  " +
-		helpKeyStyle.Render("enter") + " select  " +
-		helpKeyStyle.Render("tab") + " write message  " +
-		helpKeyStyle.Render("q") + " quit"
+	return helpKeyStyle.Render("↑↓") + " navigate" + sep +
+		helpKeyStyle.Render("enter") + " select" + sep +
+		helpKeyStyle.Render("tab") + " write" + sep +
+		helpKeyStyle.Render("esc") + " quit"
 }
 
 // --- Layout ---
@@ -459,13 +527,16 @@ func (m *Model) updateLayout() {
 	}
 
 	chatWidth := m.width - sidebarWidth - 8
-	chatHeight := m.height - 10
+	// 2 status/help lines + 1 title + 3 input + 6 borders/padding
+	chatHeight := m.height - 18
 
 	if chatHeight < 5 {
 		chatHeight = 5
 	}
 
-	m.sidebar.SetSize(sidebarWidth-4, m.height-4)
+	// Sidebar list height so rendered sidebar (list + border/padding) matches right panel
+	sidebarHeight := chatHeight + 4
+	m.sidebar.SetSize(sidebarWidth-4, sidebarHeight)
 	m.viewport.Width = chatWidth
 	m.viewport.Height = chatHeight
 	m.input.SetWidth(chatWidth)
@@ -715,6 +786,16 @@ func activeDelegate() list.DefaultDelegate {
 	d.ShowDescription = false
 	d.SetHeight(1)
 	d.SetSpacing(0)
+	d.Styles.SelectedTitle = lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(accent).
+		Foreground(accent).
+		Background(bgHighlight).
+		Bold(true).
+		Padding(0, 0, 0, 1)
+	d.Styles.NormalTitle = lipgloss.NewStyle().
+		Foreground(textBright).
+		Padding(0, 0, 0, 2)
 	return d
 }
 
@@ -723,6 +804,12 @@ func dimDelegate() list.DefaultDelegate {
 	d.ShowDescription = false
 	d.SetHeight(1)
 	d.SetSpacing(0)
-	d.Styles.SelectedTitle = d.Styles.NormalTitle
+	d.Styles.SelectedTitle = lipgloss.NewStyle().
+		Foreground(textMuted).
+		Background(bgHighlight).
+		Padding(0, 1)
+	d.Styles.NormalTitle = lipgloss.NewStyle().
+		Foreground(textMuted).
+		Padding(0, 1)
 	return d
 }
