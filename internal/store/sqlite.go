@@ -188,6 +188,30 @@ func (s *SQLiteStore) UnreadCount(agentID int64) (int, error) {
 	return count, err
 }
 
+func (s *SQLiteStore) UnreadCounts(agentID int64) (map[string]int, error) {
+	rows, err := s.db.Query(`
+		SELECT a.name, COUNT(*) FROM messages m
+		JOIN agents a ON m.to_id = a.id
+		WHERE (m.to_id = ? OR m.to_id IN (SELECT group_id FROM group_members WHERE member_id = ?))
+		AND m.from_id != ?
+		AND m.read_at IS NULL
+		GROUP BY m.to_id`, agentID, agentID, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := make(map[string]int)
+	for rows.Next() {
+		var name string
+		var count int
+		if err := rows.Scan(&name, &count); err != nil {
+			return nil, err
+		}
+		counts[name] = count
+	}
+	return counts, rows.Err()
+}
+
 // --- Keys ---
 
 func (s *SQLiteStore) AddKey(agentID int64, fingerprint, publicKey string) error {

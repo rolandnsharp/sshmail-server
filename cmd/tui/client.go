@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 type Client struct {
@@ -27,16 +29,18 @@ type Message struct {
 }
 
 type Agent struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	Bio       string    `json:"bio,omitempty"`
-	Public    bool      `json:"public,omitempty"`
-	JoinedAt  time.Time `json:"joined_at"`
-	InvitedBy int64     `json:"invited_by,omitempty"`
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	Fingerprint string    `json:"fingerprint,omitempty"`
+	Bio         string    `json:"bio,omitempty"`
+	Public      bool      `json:"public,omitempty"`
+	JoinedAt    time.Time `json:"joined_at"`
+	InvitedBy   int64     `json:"invited_by,omitempty"`
 }
 
 type PollResult struct {
-	Unread int `json:"unread"`
+	Unread int            `json:"unread"`
+	Counts map[string]int `json:"counts,omitempty"`
 }
 
 type InboxResult struct {
@@ -82,9 +86,14 @@ func NewClient(host string, port int, keyPath string) (*Client, error) {
 		return nil, fmt.Errorf("parse key: %w", err)
 	}
 
+	hostKeyCallback, err := knownHostsCallback()
+	if err != nil {
+		return nil, fmt.Errorf("known hosts: %w", err)
+	}
+
 	config := &ssh.ClientConfig{
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         10 * time.Second,
 	}
 
@@ -138,6 +147,18 @@ func (c *Client) Poll() (int, error) {
 		return 0, err
 	}
 	return result.Unread, nil
+}
+
+func (c *Client) PollCounts() (*PollResult, error) {
+	out, err := c.run("poll --counts")
+	if err != nil {
+		return nil, err
+	}
+	var result PollResult
+	if err := json.Unmarshal(out, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 func (c *Client) Inbox(all bool) ([]Message, error) {
@@ -226,6 +247,77 @@ func (c *Client) GroupMembers(group string) ([]GroupMember, error) {
 		return nil, err
 	}
 	return result.Members, nil
+}
+
+type WatchEvent struct {
+	Type string `json:"type"`
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
+	Body string `json:"body,omitempty"`
+	ID   int64  `json:"id,omitempty"`
+	At   string `json:"at,omitempty"`
+}
+
+// Watch opens a persistent SSH connection and streams events.
+// Events are sent to the returned channel. The connection closes when ctx is cancelled.
+func (c *Client) Watch(events chan<- WatchEvent) error {
+	conn, err := net.DialTimeout("tcp", c.addr, c.config.Timeout)
+	if err != nil {
+		return err
+	}
+
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, c.addr, c.config)
+	if err != nil {
+		conn.Close()
+		return err
+	}
+	client := ssh.NewClient(sshConn, chans, reqs)
+
+	session, err := client.NewSession()
+	if err != nil {
+		client.Close()
+		return err
+	}
+
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		session.Close()
+		client.Close()
+		return err
+	}
+
+	if err := session.Start("watch"); err != nil {
+		session.Close()
+		client.Close()
+		return err
+	}
+
+	go func() {
+		defer client.Close()
+		defer session.Close()
+		dec := json.NewDecoder(stdout)
+		for dec.More() {
+			var evt WatchEvent
+			if err := dec.Decode(&evt); err != nil {
+				return
+			}
+			events <- evt
+		}
+	}()
+
+	return nil
+}
+
+func knownHostsCallback() (ssh.HostKeyCallback, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	khPath := filepath.Join(home, ".ssh", "known_hosts")
+	if _, err := os.Stat(khPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("no known_hosts file at %s — connect once with ssh to accept the host key", khPath)
+	}
+	return knownhosts.New(khPath)
 }
 
 func quote(s string) string {

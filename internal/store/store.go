@@ -55,6 +55,7 @@ type Store interface {
 	GetMessage(id int64) (*Message, error)
 	MarkRead(id int64) error
 	UnreadCount(agentID int64) (int, error)
+	UnreadCounts(agentID int64) (map[string]int, error)
 
 	// Keys
 	AddKey(agentID int64, fingerprint, publicKey string) error

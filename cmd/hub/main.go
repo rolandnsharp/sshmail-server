@@ -9,8 +9,10 @@ import (
 	"strings"
 	"syscall"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
+	bm "github.com/charmbracelet/wish/bubbletea"
 	lm "github.com/charmbracelet/wish/logging"
 	"github.com/charmbracelet/keygen"
 	gossh "golang.org/x/crypto/ssh"
@@ -19,6 +21,7 @@ import (
 	"github.com/rolandnsharp/sshmail-server/internal/auth"
 	"github.com/rolandnsharp/sshmail-server/internal/config"
 	"github.com/rolandnsharp/sshmail-server/internal/store"
+	"github.com/rolandnsharp/sshmail-server/internal/tui"
 )
 
 func main() {
@@ -52,7 +55,7 @@ func main() {
 		seedAdmin(db, cfg.AdminKey)
 	}
 
-	handler := &api.Handler{Store: db, DataDir: cfg.DataDir}
+	handler := &api.Handler{Store: db, DataDir: cfg.DataDir, Events: api.NewHub()}
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	srv, err := wish.NewServer(
@@ -63,6 +66,50 @@ func main() {
 			lm.Middleware(),
 			func(next ssh.Handler) ssh.Handler {
 				return func(sess ssh.Session) {
+					cmd := sess.Command()
+					_, _, ptyActive := sess.Pty()
+
+					// Interactive session with PTY and no command → serve TUI
+					if len(cmd) == 0 && ptyActive {
+						agent := auth.AgentFromContext(sess.Context())
+						if agent == nil {
+							wish.Println(sess, "not authenticated")
+							return
+						}
+						backend := &tui.LocalBackend{
+							Store:   db,
+							Agent:   agent,
+							Events:  handler.Events,
+							DataDir: cfg.DataDir,
+						}
+						m := tui.NewModel(backend)
+						opts := bm.MakeOptions(sess)
+						opts = append(opts, tea.WithAltScreen())
+						p := tea.NewProgram(m, opts...)
+
+						_, windowChanges, _ := sess.Pty()
+						ctx, cancel := context.WithCancel(sess.Context())
+						go func() {
+							for {
+								select {
+								case <-ctx.Done():
+									p.Quit()
+									return
+								case w := <-windowChanges:
+									p.Send(tea.WindowSizeMsg{Width: w.Width, Height: w.Height})
+								}
+							}
+						}()
+
+						if _, err := p.Run(); err != nil {
+							log.Printf("TUI error for %s: %v", agent.Name, err)
+						}
+						p.Kill()
+						cancel()
+						return
+					}
+
+					// Non-interactive: use the command API
 					handler.Handle(sess)
 				}
 			},

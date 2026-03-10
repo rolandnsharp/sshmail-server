@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/ssh"
@@ -17,9 +19,67 @@ import (
 	"github.com/rolandnsharp/sshmail-server/internal/store"
 )
 
+// Event is pushed to watchers when something happens.
+type Event struct {
+	Type    string `json:"type"`              // "message", "read", etc.
+	From    string `json:"from,omitempty"`
+	To      string `json:"to,omitempty"`
+	Body    string `json:"body,omitempty"`
+	ID      int64  `json:"id,omitempty"`
+	At      string `json:"at,omitempty"`
+}
+
+// Hub manages event subscriptions.
+type Hub struct {
+	mu   sync.RWMutex
+	subs map[int64]map[chan Event]struct{} // agentID → set of channels
+}
+
+func NewHub() *Hub {
+	return &Hub{subs: make(map[int64]map[chan Event]struct{})}
+}
+
+func (h *Hub) Subscribe(agentID int64) chan Event {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ch := make(chan Event, 16)
+	if h.subs[agentID] == nil {
+		h.subs[agentID] = make(map[chan Event]struct{})
+	}
+	h.subs[agentID][ch] = struct{}{}
+	return ch
+}
+
+func (h *Hub) Unsubscribe(agentID int64, ch chan Event) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if m, ok := h.subs[agentID]; ok {
+		delete(m, ch)
+		if len(m) == 0 {
+			delete(h.subs, agentID)
+		}
+	}
+	close(ch)
+}
+
+// Notify sends an event to all watchers of the given agent IDs.
+func (h *Hub) Notify(agentIDs []int64, evt Event) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, id := range agentIDs {
+		for ch := range h.subs[id] {
+			select {
+			case ch <- evt:
+			default: // drop if watcher is slow
+			}
+		}
+	}
+}
+
 type Handler struct {
 	Store   store.Store
 	DataDir string
+	Events  *Hub
 }
 
 func (h *Handler) Handle(sess ssh.Session) {
@@ -62,7 +122,7 @@ func (h *Handler) Handle(sess ssh.Session) {
 	case "fetch":
 		h.handleFetch(sess, cmd, agent)
 	case "poll":
-		h.handlePoll(sess, agent)
+		h.handlePoll(sess, cmd, agent)
 	case "board":
 		h.handleBoard(sess, cmd, agent)
 	case "channel":
@@ -75,6 +135,12 @@ func (h *Handler) Handle(sess ssh.Session) {
 		h.handleGroup(sess, cmd, agent)
 	case "invite":
 		h.handleInviteCreate(sess, agent)
+	case "watch":
+		h.handleWatch(sess, agent)
+	case "git-upload-pack":
+		h.handleGitUploadPack(sess, cmd, agent)
+	case "git-receive-pack":
+		h.handleGitReceivePack(sess, cmd, agent)
 	default:
 		writeJSON(sess, map[string]any{"error": fmt.Sprintf("unknown command: %s", cmd[0])})
 	}
@@ -236,6 +302,10 @@ func (h *Handler) handleSend(sess ssh.Session, cmd []string, agent *store.Agent)
 		}
 	}
 
+	if message == "" && fileName != nil {
+		message = fmt.Sprintf("sent a file: %s", *fileName)
+	}
+
 	var filePath *string
 	if fileName != nil {
 		// Read file from stdin
@@ -267,6 +337,52 @@ func (h *Handler) handleSend(sess ssh.Session, cmd []string, agent *store.Agent)
 		writeErr(sess, err)
 		return
 	}
+
+	now := time.Now()
+
+	// Notify watchers
+	evt := Event{
+		Type: "message",
+		From: agent.Name,
+		To:   to.Name,
+		Body: message,
+		ID:   id,
+		At:   now.UTC().Format(time.RFC3339),
+	}
+	if h.Events != nil {
+		go func() {
+			if to.Public || to.PublicKey == "" {
+				// Board or group: notify all members
+				members, err := h.Store.GroupMembers(to.ID)
+				if err == nil {
+					ids := make([]int64, len(members))
+					for i, m := range members {
+						ids[i] = m.AgentID
+					}
+					h.Events.Notify(ids, evt)
+				}
+			} else {
+				// DM: notify recipient and sender
+				h.Events.Notify([]int64{to.ID, agent.ID}, evt)
+			}
+		}()
+	}
+
+	// Commit message to recipient's git repo (non-blocking, non-fatal)
+	go func() {
+		var repoName, msgPath string
+		if to.Public || to.PublicKey == "" {
+			repoName = to.Name
+			msgPath = "messages/" + agent.Name + ".md"
+		} else {
+			repoName = to.Name
+			msgPath = "messages/direct/" + agent.Name + ".md"
+		}
+		if err := h.CommitMessage(repoName, msgPath, agent.Name, message, now); err != nil {
+			fmt.Fprintf(os.Stderr, "git commit error: %v\n", err)
+		}
+	}()
+
 	writeJSON(sess, map[string]any{"ok": true, "id": id})
 }
 
@@ -563,13 +679,57 @@ func (h *Handler) handleBoard(sess ssh.Session, cmd []string, agent *store.Agent
 	writeJSON(sess, map[string]any{"board": boardName, "messages": msgs})
 }
 
-func (h *Handler) handlePoll(sess ssh.Session, agent *store.Agent) {
+func (h *Handler) handlePoll(sess ssh.Session, cmd []string, agent *store.Agent) {
+	if len(cmd) > 1 && cmd[1] == "--counts" {
+		counts, err := h.Store.UnreadCounts(agent.ID)
+		if err != nil {
+			writeErr(sess, err)
+			return
+		}
+		total := 0
+		for _, c := range counts {
+			total += c
+		}
+		writeJSON(sess, map[string]any{"unread": total, "counts": counts})
+		return
+	}
 	count, err := h.Store.UnreadCount(agent.ID)
 	if err != nil {
 		writeErr(sess, err)
 		return
 	}
 	writeJSON(sess, map[string]any{"unread": count})
+}
+
+func (h *Handler) handleWatch(sess ssh.Session, agent *store.Agent) {
+	if h.Events == nil {
+		writeJSON(sess, map[string]any{"error": "event hub not initialized"})
+		return
+	}
+
+	ch := h.Events.Subscribe(agent.ID)
+	defer h.Events.Unsubscribe(agent.ID, ch)
+
+	enc := json.NewEncoder(sess)
+	enc.SetEscapeHTML(false)
+
+	// Send a connected event so the client knows the stream is alive
+	enc.Encode(Event{Type: "connected"})
+
+	ctx := sess.Context()
+	for {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := enc.Encode(evt); err != nil {
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (h *Handler) handleInviteCreate(sess ssh.Session, agent *store.Agent) {
@@ -610,7 +770,176 @@ func (h *Handler) handleInviteRedeem(sess ssh.Session, cmd []string) {
 		writeJSON(sess, map[string]any{"error": err.Error()})
 		return
 	}
+
+	// Init git repo for new agent
+	if err := h.InitRepo(agent.Name); err != nil {
+		// Non-fatal: agent is created, repo can be initialized later
+		fmt.Fprintf(sess.Stderr(), "warning: failed to init repo: %v\n", err)
+	}
+
 	writeJSON(sess, map[string]any{"ok": true, "name": agent.Name, "id": agent.ID})
+}
+
+// --- Git ---
+
+// RepoPath returns the absolute path to an agent's bare git repo.
+func (h *Handler) RepoPath(name string) string {
+	p := filepath.Join(h.DataDir, "repos", name+".git")
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	return abs
+}
+
+// InitRepo creates a bare git repo for an agent if it doesn't exist.
+func (h *Handler) InitRepo(name string) error {
+	rp := h.RepoPath(name)
+	if _, err := os.Stat(rp); err == nil {
+		return nil // already exists
+	}
+	cmd := exec.Command("git", "init", "--bare", rp)
+	return cmd.Run()
+}
+
+// CommitMessage appends a message to a markdown file in a bare git repo.
+// For DMs, path is "messages/direct/<from>.md". For groups/boards, path is "messages/<from>.md".
+func (h *Handler) CommitMessage(repoName, filePath, from, body string, at time.Time) error {
+	fmt.Fprintf(os.Stderr, "CommitMessage: repo=%s file=%s from=%s\n", repoName, filePath, from)
+	if err := h.InitRepo(repoName); err != nil {
+		return fmt.Errorf("init repo: %w", err)
+	}
+
+	rp := h.RepoPath(repoName)
+	fmt.Fprintf(os.Stderr, "CommitMessage: repoPath=%s\n", rp)
+
+	// Use a temp worktree to commit into the bare repo
+	tmpDir, err := os.MkdirTemp("", "sshmail-commit-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Init a temp working dir and point it at the bare repo
+	initCmd := exec.Command("git", "init", tmpDir)
+	initCmd.Stdout, initCmd.Stderr = io.Discard, io.Discard
+	if err := initCmd.Run(); err != nil {
+		return fmt.Errorf("init temp: %w", err)
+	}
+
+	remoteCmd := exec.Command("git", "-C", tmpDir, "remote", "add", "origin", rp)
+	remoteCmd.Run()
+
+	// Pull existing content if the repo has commits
+	pullCmd := exec.Command("git", "-C", tmpDir, "pull", "origin", "master")
+	pullCmd.Stdout, pullCmd.Stderr = io.Discard, io.Discard
+	pullCmd.Run() // OK to fail on empty repo
+
+	// Ensure directory exists
+	fullPath := filepath.Join(tmpDir, filePath)
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		return err
+	}
+
+	// Format the message entry
+	timestamp := at.UTC().Format(time.RFC3339)
+	entry := fmt.Sprintf("\n---\n**%s** _%s_\n\n%s\n", from, timestamp, body)
+
+	// Append to file (prepend to keep newest-first)
+	existing, _ := os.ReadFile(fullPath)
+	if err := os.WriteFile(fullPath, []byte(entry+string(existing)), 0o644); err != nil {
+		return err
+	}
+
+	// Stage, commit, push
+	addCmd := exec.Command("git", "-C", tmpDir, "add", filePath)
+	if err := addCmd.Run(); err != nil {
+		return fmt.Errorf("git add: %w", err)
+	}
+
+	commitMsg := fmt.Sprintf("message from %s", from)
+	commitCmd := exec.Command("git", "-C", tmpDir,
+		"-c", "user.name=sshmail",
+		"-c", "user.email=hub@sshmail.dev",
+		"commit", "-m", commitMsg)
+	commitCmd.Stdout, commitCmd.Stderr = io.Discard, io.Discard
+	if err := commitCmd.Run(); err != nil {
+		return fmt.Errorf("git commit: %w", err)
+	}
+
+	pushCmd := exec.Command("git", "-C", tmpDir, "push", "origin", "HEAD")
+	pushCmd.Stdout, pushCmd.Stderr = io.Discard, io.Discard
+	if err := pushCmd.Run(); err != nil {
+		return fmt.Errorf("git push: %w", err)
+	}
+
+	return nil
+}
+
+func (h *Handler) handleGitUploadPack(sess ssh.Session, cmd []string, agent *store.Agent) {
+	if len(cmd) < 2 {
+		fmt.Fprintln(sess.Stderr(), "usage: git-upload-pack <repo>")
+		return
+	}
+
+	repoName := sanitizeRepoName(cmd[1])
+	rp := h.RepoPath(repoName)
+
+	if _, err := os.Stat(rp); os.IsNotExist(err) {
+		fmt.Fprintf(sess.Stderr(), "repository not found: %s\n", repoName)
+		return
+	}
+
+	// Anyone can pull their own repo. Public agents' repos are readable by all.
+	if repoName != agent.Name {
+		target, err := h.Store.AgentByName(repoName)
+		if err != nil || target == nil || !target.Public {
+			fmt.Fprintf(sess.Stderr(), "access denied: %s\n", repoName)
+			return
+		}
+	}
+
+	c := exec.CommandContext(sess.Context(), "git", "upload-pack", rp)
+	c.Stdin = sess
+	c.Stdout = sess
+	c.Stderr = sess.Stderr()
+	c.Run()
+}
+
+func (h *Handler) handleGitReceivePack(sess ssh.Session, cmd []string, agent *store.Agent) {
+	if len(cmd) < 2 {
+		fmt.Fprintln(sess.Stderr(), "usage: git-receive-pack <repo>")
+		return
+	}
+
+	repoName := sanitizeRepoName(cmd[1])
+
+	// Agents can only push to their own repo
+	if repoName != agent.Name {
+		fmt.Fprintf(sess.Stderr(), "access denied: can only push to your own repo\n")
+		return
+	}
+
+	rp := h.RepoPath(repoName)
+
+	// Auto-init repo on first push
+	if err := h.InitRepo(repoName); err != nil {
+		fmt.Fprintf(sess.Stderr(), "failed to init repo: %v\n", err)
+		return
+	}
+
+	c := exec.CommandContext(sess.Context(), "git", "receive-pack", rp)
+	c.Stdin = sess
+	c.Stdout = sess
+	c.Stderr = sess.Stderr()
+	c.Run()
+}
+
+func sanitizeRepoName(name string) string {
+	name = strings.TrimPrefix(name, "/")
+	name = strings.TrimSuffix(name, ".git")
+	name = filepath.Base(name) // prevent path traversal
+	return name
 }
 
 func writeJSON(w io.Writer, v any) {
