@@ -167,7 +167,11 @@ type inboxMsg struct{ messages []Message }
 type boardMsg struct{ messages []Message }
 type agentsMsg struct{ agents []Agent }
 type whoamiMsg struct{ agent *Agent }
-type sentMsg struct{ id int64 }
+type sentMsg struct {
+	id     int64
+	target string
+	kind   string
+}
 type errMsg struct{ err error }
 
 // --- Focus ---
@@ -256,16 +260,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateLayout()
 		return m, nil
 
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q":
-			if m.focus == focusSidebar {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "ctrl+c", "q":
 				return m, tea.Quit
-			}
-		case "tab":
-			if m.focus == focusSidebar {
-				m.focus = focusInput
-				m.input.Focus()
+			case "i":
+				if m.focus == focusSidebar {
+					m.focus = focusInput
+					m.input.Focus()
+					m.sidebar.SetDelegate(dimDelegate())
+					return m, nil
+				}
+			case "tab":
+				if m.focus == focusSidebar {
+					m.focus = focusInput
+					m.input.Focus()
 				m.sidebar.SetDelegate(dimDelegate())
 			} else {
 				m.focus = focusSidebar
@@ -303,16 +312,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.skipSectionSelection(1)
 				return m, cmd
 			}
-		case "esc":
-			if m.focus == focusInput {
-				m.focus = focusSidebar
-				m.input.Blur()
-				m.sidebar.SetDelegate(activeDelegate())
-				return m, nil
+			case "esc":
+				if m.focus == focusInput {
+					m.focus = focusSidebar
+					m.input.Blur()
+					m.sidebar.SetDelegate(activeDelegate())
+					return m, nil
+				}
 			}
-		}
 
-		// Route keyboard to focused component
+			if m.focus == focusSidebar && msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
+				r := msg.Runes[0]
+				if !strings.ContainsRune("\n\r\t", r) && r >= 32 {
+					m.focus = focusInput
+					m.input.Focus()
+					m.sidebar.SetDelegate(dimDelegate())
+					m.input.SetValue(string(r))
+					m.input.SetCursor(len(m.input.Value()))
+					return m, nil
+				}
+			}
+
+			// Route keyboard to focused component
 		if m.focus == focusSidebar {
 			var cmd tea.Cmd
 			m.sidebar, cmd = m.sidebar.Update(msg)
@@ -338,19 +359,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateLayout()
 
 		case inboxMsg:
-				if m.selKind == "inbox" || m.selKind == "allmail" {
-					m.messages = msg.messages
-					m.renderMessages()
-					if m.selKind == "allmail" {
-						m.status = fmt.Sprintf("all mail — %d messages", len(msg.messages))
-					} else if m.unread > 0 {
+				m.messages = msg.messages
+				m.renderMessages()
+				if m.selKind == "allmail" {
+					m.status = fmt.Sprintf("all mail — %d messages", len(msg.messages))
+				} else if m.selKind == "inbox" {
+					if m.unread > 0 {
 						m.status = fmt.Sprintf("inbox — %d unread messages", len(msg.messages))
 					} else {
 						m.status = fmt.Sprintf("inbox — %d messages", len(msg.messages))
+					}
+				} else {
+					m.status = fmt.Sprintf("%s — %d messages", m.channelTitle(), len(msg.messages))
 				}
-			}
-			m.recomputeUnreadMap(msg.messages)
-			m.updateUnreadBadge()
+				m.recomputeUnreadMap(msg.messages)
+				m.updateUnreadBadge()
 
 	case boardMsg:
 			m.messages = msg.messages
@@ -380,14 +403,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pollErrMsg:
 		cmds = append(cmds, m.pollTick())
 
-	case sentMsg:
-		m.status = fmt.Sprintf("sent #%d", msg.id)
-		// Refresh current view
-		if m.selKind == "inbox" || m.selKind == "dm" {
-			cmds = append(cmds, m.fetchInbox)
-		} else {
-			cmds = append(cmds, m.fetchChannel(channelItem{name: m.selected, kind: m.selKind}))
-		}
+		case sentMsg:
+			m.status = fmt.Sprintf("sent to %s as #%d", m.channelLabel(msg.target, msg.kind), msg.id)
+			// Refresh current view
+			if m.selKind == "inbox" {
+				cmds = append(cmds, m.fetchUnreadInbox)
+			} else if m.selKind == "allmail" {
+				cmds = append(cmds, m.fetchInbox)
+			} else {
+				cmds = append(cmds, m.fetchChannel(channelItem{name: m.selected, kind: m.selKind}))
+			}
 
 	case errMsg:
 		m.err = msg.err
@@ -515,8 +540,12 @@ func (m model) channelTitle() string {
 	if m.selKind == "allmail" {
 		return "all mail"
 	}
+	return m.channelLabel(m.selected, m.selKind)
+}
+
+func (m model) channelLabel(name, kind string) string {
 	prefix := ""
-	switch m.selKind {
+	switch kind {
 	case "group":
 		prefix = "# "
 	case "board":
@@ -524,7 +553,7 @@ func (m model) channelTitle() string {
 	case "dm":
 		prefix = ""
 	}
-	return prefix + m.selected
+	return prefix + name
 }
 
 func (m model) agentName() string {
@@ -723,7 +752,7 @@ func (m model) sendMessage(text string) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		return sentMsg{result.ID}
+		return sentMsg{id: result.ID, target: target, kind: m.selKind}
 	}
 }
 
