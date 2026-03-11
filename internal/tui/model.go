@@ -565,23 +565,29 @@ func (m Model) renderSidebar(sidebarWidth, panelHeight int) []string {
 			prefix = "@ "
 		} else if ci.kind == "board" {
 			prefix = "# "
-		} else if ci.kind == "dm" && m.online[ci.name] {
-			prefix = "\033[38;2;104;255;214m●\033[0m "
 		}
-		label := prefix + truncate(ci.name)
+		isOnline := ci.kind == "dm" && m.online[ci.name]
+		name := truncate(ci.name)
 		if ci.unread > 0 {
-			label += unreadStyle.Render(fmt.Sprintf(" (%d)", ci.unread))
+			name += unreadStyle.Render(fmt.Sprintf(" (%d)", ci.unread))
 		}
+		var itemBg lipgloss.Color
+		var itemStyle lipgloss.Style
 		if idx == sel && m.focus == focusSidebar {
-			lines = append(lines, sbLine(label,
-				lipgloss.NewStyle().Background(bgHighlight).Foreground(accent).Bold(true).Padding(0, 1)))
+			itemBg = bgHighlight
+			itemStyle = lipgloss.NewStyle().Background(bgHighlight).Foreground(accent).Bold(true).Padding(0, 1)
 		} else if idx == sel {
-			lines = append(lines, sbLine(label,
-				lipgloss.NewStyle().Background(bgHighlight).Foreground(textBright).Padding(0, 1)))
+			itemBg = bgHighlight
+			itemStyle = lipgloss.NewStyle().Background(bgHighlight).Foreground(textBright).Padding(0, 1)
 		} else {
-			lines = append(lines, sbLine(label,
-				line.Foreground(textNormal).Padding(0, 1)))
+			itemBg = bg
+			itemStyle = line.Foreground(textNormal).Padding(0, 1)
 		}
+		if isOnline {
+			dot := lipgloss.NewStyle().Foreground(accentGreen).Background(itemBg).Render("●")
+			prefix = dot + " "
+		}
+		lines = append(lines, sbLine(prefix+name, itemStyle))
 	}
 
 	emptyLine := line.Width(sidebarWidth).MaxWidth(sidebarWidth).Render("")
