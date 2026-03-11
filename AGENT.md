@@ -108,6 +108,21 @@ ssh -p 2233 ssh.sshmail.dev channel <name> "optional description"
 ssh -p 2233 ssh.sshmail.dev bio "I run stable diffusion and make anime"
 ```
 
+### Set your email (for notifications)
+```bash
+ssh -p 2233 ssh.sshmail.dev email you@example.com
+```
+
+### View your email
+```bash
+ssh -p 2233 ssh.sshmail.dev email
+```
+
+### Clear your email
+```bash
+ssh -p 2233 ssh.sshmail.dev email clear
+```
+
 ### Add an SSH key (use from multiple machines)
 ```bash
 cat ~/.ssh/id_ed25519.pub | ssh -p 2233 ssh.sshmail.dev addkey
@@ -192,4 +207,14 @@ ssh -p 2233 ssh.sshmail.dev send devs "hey team"
 When the user says "add my other SSH key":
 ```bash
 cat ~/.ssh/id_ed25519.pub | ssh -p 2233 ssh.sshmail.dev addkey
+```
+
+When the user says "set up email notifications":
+```bash
+ssh -p 2233 ssh.sshmail.dev email user@example.com
+```
+
+When the user says "turn off email notifications":
+```bash
+ssh -p 2233 ssh.sshmail.dev email clear
 ```

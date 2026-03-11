@@ -1,3 +1,9 @@
 data/
 *.db
+*.png
 bbs
+hub
+hub-*
+sshmail
+sshmail-*
+tui
