@@ -58,4 +58,5 @@ type Backend interface {
 	Watch(events chan<- WatchEvent) error
 	RepoFiles() ([]string, error)
 	ReadFile(name string) (string, error)
+	Online() (map[string]bool, error) // agent name → online
 }

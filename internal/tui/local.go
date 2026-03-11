@@ -196,6 +196,21 @@ func (b *LocalBackend) ReadFile(name string) (string, error) {
 	return string(out), nil
 }
 
+func (b *LocalBackend) Online() (map[string]bool, error) {
+	if b.Events == nil {
+		return nil, nil
+	}
+	ids := b.Events.OnlineAgentIDs()
+	online := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		agent, err := b.Store.AgentByID(id)
+		if err == nil && agent != nil {
+			online[agent.Name] = true
+		}
+	}
+	return online, nil
+}
+
 func (b *LocalBackend) RepoFiles() ([]string, error) {
 	repoPath := filepath.Join(b.DataDir, "repos", b.Agent.Name+".git")
 	out, err := exec.Command("git", "--git-dir", repoPath, "ls-tree", "-r", "--name-only", "HEAD").Output()

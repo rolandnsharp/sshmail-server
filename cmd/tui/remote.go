@@ -110,6 +110,10 @@ func (r *RemoteBackend) ReadFile(name string) (string, error) {
 	return "", fmt.Errorf("file viewing not available over remote client")
 }
 
+func (r *RemoteBackend) Online() (map[string]bool, error) {
+	return nil, nil // not available over remote client
+}
+
 func (r *RemoteBackend) Watch(events chan<- tui.WatchEvent) error {
 	// Bridge the client's WatchEvent to tui.WatchEvent
 	clientCh := make(chan WatchEvent, 16)

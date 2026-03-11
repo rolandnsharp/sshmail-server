@@ -115,6 +115,7 @@ type errMsg struct{ err error }
 type watchEventMsg struct{ event WatchEvent }
 type repoFilesMsg struct{ files []string }
 type fileContentMsg struct{ name, content string }
+type onlineMsg struct{ online map[string]bool }
 
 // --- Focus ---
 
@@ -145,6 +146,7 @@ type Model struct {
 	watchChan chan WatchEvent
 	repoFiles []string
 	agents    []Agent
+	online    map[string]bool
 }
 
 func NewModel(backend Backend) Model {
@@ -200,6 +202,7 @@ func (m Model) Init() tea.Cmd {
 		m.fetchAgents,
 		m.startWatch(),
 		m.fetchRepoFiles,
+		m.fetchOnline,
 	)
 }
 
@@ -383,6 +386,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.watchChan = msg.ch
 		m.status = fmt.Sprintf("%s — connected", m.agentName())
 		cmds = append(cmds, waitForEvent(msg.ch))
+		cmds = append(cmds, m.fetchOnline)
 
 	case watchEventMsg:
 		evt := msg.event
@@ -402,6 +406,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateUnreadCounts(msg.counts)
 		cmds = append(cmds, m.fetchChannel(channelItem{name: m.selected, kind: m.selKind}))
 		cmds = append(cmds, m.pollTick())
+		cmds = append(cmds, m.fetchOnline)
 
 	case pollErrMsg:
 		cmds = append(cmds, m.pollTick())
@@ -426,6 +431,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.SetContent(content)
 		m.viewport.GotoTop()
 		m.status = fmt.Sprintf("file: %s", msg.name)
+
+	case onlineMsg:
+		m.online = msg.online
 
 	case errMsg:
 		m.err = msg.err
@@ -522,7 +530,7 @@ func (m Model) renderSidebar(sidebarWidth, panelHeight int) []string {
 	brandText += "\033[0m"
 	lines = append(lines, brandText)
 
-	maxText := sidebarWidth - 2
+	maxText := sidebarWidth - 4 // padding + prefix
 	truncate := func(s string) string {
 		if len(s) > maxText {
 			return s[:maxText-1] + "…"
@@ -557,8 +565,10 @@ func (m Model) renderSidebar(sidebarWidth, panelHeight int) []string {
 			prefix = "@ "
 		} else if ci.kind == "board" {
 			prefix = "# "
+		} else if ci.kind == "dm" && m.online[ci.name] {
+			prefix = "\033[38;2;104;255;214m●\033[0m "
 		}
-		label := truncate(prefix + ci.name)
+		label := prefix + truncate(ci.name)
 		if ci.unread > 0 {
 			label += unreadStyle.Render(fmt.Sprintf(" (%d)", ci.unread))
 		}
@@ -891,6 +901,14 @@ func (m Model) fetchWhoami() tea.Msg {
 		return errMsg{err}
 	}
 	return whoamiMsg{agent}
+}
+
+func (m Model) fetchOnline() tea.Msg {
+	online, err := m.backend.Online()
+	if err != nil {
+		return onlineMsg{nil}
+	}
+	return onlineMsg{online}
 }
 
 func (m Model) fetchRepoFiles() tea.Msg {

@@ -63,6 +63,17 @@ func (h *Hub) Unsubscribe(agentID int64, ch chan Event) {
 	close(ch)
 }
 
+// OnlineAgentIDs returns the IDs of agents with active watchers.
+func (h *Hub) OnlineAgentIDs() []int64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	ids := make([]int64, 0, len(h.subs))
+	for id := range h.subs {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // Notify sends an event to all watchers of the given agent IDs.
 func (h *Hub) Notify(agentIDs []int64, evt Event) {
 	h.mu.RLock()
