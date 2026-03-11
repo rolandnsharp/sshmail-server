@@ -730,7 +730,6 @@ func (m *Model) updateLayout() {
 	m.renderMessages()
 }
 
-// wrapText wraps s at word boundaries using lipgloss.
 // nameColorFor returns an ANSI foreground escape for a username, consistent per name.
 func nameColorFor(name string) string {
 	h := 0
@@ -744,15 +743,9 @@ func nameColorFor(name string) string {
 	return fmt.Sprintf("\033[1;38;2;%d;%d;%dm", c[0], c[1], c[2])
 }
 
-func wrapText(s string, maxWidth int) string {
-	return lipgloss.NewStyle().Width(maxWidth).Render(s)
-}
-
 // --- Rendering ---
 
 func (m *Model) renderMessages() {
-	fileStyle := lipgloss.NewStyle().Foreground(accentWarm)
-
 	renderer, _ := glamour.NewTermRenderer(
 		glamour.WithWordWrap(m.viewport.Width-10),
 		glamour.WithStylePath("dark"),
@@ -763,33 +756,20 @@ func (m *Model) renderMessages() {
 		msg := m.messages[i]
 		ts := "\033[38;2;133;131;146m" + msg.At.Local().Format("15:04") + "\033[0m"
 		from := nameColorFor(msg.From) + msg.From + ":\033[0m"
-		header := ts + " " + from
+		header := "  " + ts + " " + from
 
 		body := msg.Body
-		isSimple := !strings.Contains(body, "\n") && !strings.Contains(body, "```")
-
-		if !isSimple && renderer != nil {
-			if rendered, err := renderer.Render(body); err == nil {
-				body = strings.TrimSpace(rendered)
-			}
-		}
-
 		if msg.File != nil {
-			body += fileStyle.Render(fmt.Sprintf(" [%s]", *msg.File))
+			body += "\n\n📎 " + *msg.File
 		}
 
-		margin := "  " // left margin matching glamour style
-		if isSimple {
-			maxWidth := m.viewport.Width - 4
-			line := header + " " + body
-			if len(line) <= maxWidth {
-				sb.WriteString(margin + line + "\n")
-			} else {
-				sb.WriteString(margin + header + "\n" + margin + wrapText(body, maxWidth) + "\n")
+		if renderer != nil {
+			if rendered, err := renderer.Render(body); err == nil {
+				body = strings.Trim(rendered, "\n")
 			}
-		} else {
-			sb.WriteString(margin + header + "\n" + body + "\n")
 		}
+
+		sb.WriteString(header + "\n" + body + "\n")
 	}
 	m.viewport.SetContent(sb.String())
 	m.viewport.GotoBottom()
