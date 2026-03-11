@@ -1131,6 +1131,82 @@ func TestGroupMessageReadAccess(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// requireAgent helper tests
+// ---------------------------------------------------------------------------
+
+func TestRequireAgentFound(t *testing.T) {
+	h, ms := setupHandler(t)
+	addAgent(ms, "alice")
+
+	sess := newMockSession(nil, nil)
+	agent, ok := h.requireAgent(sess, "alice")
+	if !ok || agent == nil {
+		t.Fatal("expected requireAgent to find alice")
+	}
+	if agent.Name != "alice" {
+		t.Fatalf("expected name=alice, got %s", agent.Name)
+	}
+}
+
+func TestRequireAgentNotFound(t *testing.T) {
+	h, _ := setupHandler(t)
+
+	sess := newMockSession(nil, nil)
+	agent, ok := h.requireAgent(sess, "nobody")
+	if ok || agent != nil {
+		t.Fatal("expected requireAgent to return false for nonexistent agent")
+	}
+	out := sess.outputJSON()
+	assertError(t, out, "agent not found")
+}
+
+// ---------------------------------------------------------------------------
+// canAccessMessage helper tests
+// ---------------------------------------------------------------------------
+
+func TestCanAccessMessageDM(t *testing.T) {
+	h, ms := setupHandler(t)
+	alice := addAgent(ms, "alice")
+	bob := addAgent(ms, "bob")
+	charlie := addAgent(ms, "charlie")
+
+	msg := &store.Message{ID: 1, FromID: alice.ID, ToID: bob.ID}
+
+	if !h.canAccessMessage(msg, alice.ID) {
+		t.Fatal("sender should have access")
+	}
+	if !h.canAccessMessage(msg, bob.ID) {
+		t.Fatal("recipient should have access")
+	}
+	if h.canAccessMessage(msg, charlie.ID) {
+		t.Fatal("third party should not have access")
+	}
+}
+
+func TestCanAccessMessageGroup(t *testing.T) {
+	h, ms := setupHandler(t)
+	alice := addAgent(ms, "alice")
+	bob := addAgent(ms, "bob")
+	charlie := addAgent(ms, "charlie")
+
+	// Create group, add bob
+	grp, _ := ms.CreateGroup("team", "", alice.ID)
+	ms.AddGroupMember(grp.ID, bob.ID)
+
+	msg := &store.Message{ID: 1, FromID: alice.ID, ToID: grp.ID}
+
+	if !h.canAccessMessage(msg, alice.ID) {
+		t.Fatal("sender should have access")
+	}
+	if !h.canAccessMessage(msg, bob.ID) {
+		t.Fatal("group member should have access")
+	}
+	if h.canAccessMessage(msg, charlie.ID) {
+		t.Fatal("non-member should not have access")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Auth context integration — verify AgentFromContext works
 // ---------------------------------------------------------------------------
 

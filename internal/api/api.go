@@ -192,13 +192,8 @@ func (h *Handler) handlePubkey(sess ssh.Session, cmd []string) {
 		writeJSON(sess, map[string]any{"error": "usage: pubkey <agent>"})
 		return
 	}
-	agent, err := h.Store.AgentByName(cmd[1])
-	if err != nil {
-		writeErr(sess, err)
-		return
-	}
-	if agent == nil {
-		writeJSON(sess, map[string]any{"error": fmt.Sprintf("agent not found: %s", cmd[1])})
+	agent, ok := h.requireAgent(sess, cmd[1])
+	if !ok {
 		return
 	}
 	// Raw output so it can be piped directly into age -R
@@ -275,7 +270,7 @@ func (h *Handler) handleAddKey(sess ssh.Session, agent *store.Agent) {
 	}
 	pubKeyStr := strings.TrimSpace(string(pubKeyData))
 	if pubKeyStr == "" {
-		writeJSON(sess, map[string]any{"error": "pipe your public key to stdin: cat ~/.ssh/id_ed25519.pub | ssh -p 2233 ssh.sshmail.dev addkey"})
+		writeJSON(sess, map[string]any{"error": "pipe your public key to stdin: cat ~/.ssh/id_ed25519.pub | ssh ssh.sshmail.dev addkey"})
 		return
 	}
 	pubKey, _, _, _, err := gossh.ParseAuthorizedKey([]byte(pubKeyStr))
@@ -309,13 +304,8 @@ func (h *Handler) handleSend(sess ssh.Session, cmd []string, agent *store.Agent)
 	}
 
 	toName := cmd[1]
-	to, err := h.Store.AgentByName(toName)
-	if err != nil {
-		writeErr(sess, err)
-		return
-	}
-	if to == nil {
-		writeJSON(sess, map[string]any{"error": fmt.Sprintf("agent not found: %s", toName)})
+	to, ok := h.requireAgent(sess, toName)
+	if !ok {
 		return
 	}
 
@@ -518,13 +508,9 @@ func (h *Handler) handleRead(sess ssh.Session, cmd []string, agent *store.Agent)
 		writeJSON(sess, map[string]any{"error": "message not found"})
 		return
 	}
-	if msg.ToID != agent.ID && msg.FromID != agent.ID {
-		// Check if it's a group message the agent can access
-		isMember, _ := h.Store.IsGroupMember(msg.ToID, agent.ID)
-		if !isMember {
-			writeJSON(sess, map[string]any{"error": "message not found"})
-			return
-		}
+	if !h.canAccessMessage(msg, agent.ID) {
+		writeJSON(sess, map[string]any{"error": "message not found"})
+		return
 	}
 	if msg.ToID == agent.ID {
 		h.Store.MarkRead(id)
@@ -553,12 +539,9 @@ func (h *Handler) handleFetch(sess ssh.Session, cmd []string, agent *store.Agent
 		writeJSON(sess, map[string]any{"error": "message not found"})
 		return
 	}
-	if msg.ToID != agent.ID && msg.FromID != agent.ID {
-		isMember, _ := h.Store.IsGroupMember(msg.ToID, agent.ID)
-		if !isMember {
-			writeJSON(sess, map[string]any{"error": "message not found"})
-			return
-		}
+	if !h.canAccessMessage(msg, agent.ID) {
+		writeJSON(sess, map[string]any{"error": "message not found"})
+		return
 	}
 
 	if msg.FilePath == nil {
@@ -629,13 +612,8 @@ func (h *Handler) handleGroup(sess ssh.Session, cmd []string, agent *store.Agent
 			writeJSON(sess, map[string]any{"error": "usage: group add <group> <agent>"})
 			return
 		}
-		grp, err := h.Store.AgentByName(cmd[2])
-		if err != nil {
-			writeErr(sess, err)
-			return
-		}
-		if grp == nil {
-			writeJSON(sess, map[string]any{"error": fmt.Sprintf("group not found: %s", cmd[2])})
+		grp, ok := h.requireAgent(sess, cmd[2])
+		if !ok {
 			return
 		}
 		isMember, err := h.Store.IsGroupMember(grp.ID, agent.ID)
@@ -647,13 +625,8 @@ func (h *Handler) handleGroup(sess ssh.Session, cmd []string, agent *store.Agent
 			writeJSON(sess, map[string]any{"error": "you are not a member of this group"})
 			return
 		}
-		target, err := h.Store.AgentByName(cmd[3])
-		if err != nil {
-			writeErr(sess, err)
-			return
-		}
-		if target == nil {
-			writeJSON(sess, map[string]any{"error": fmt.Sprintf("agent not found: %s", cmd[3])})
+		target, ok := h.requireAgent(sess, cmd[3])
+		if !ok {
 			return
 		}
 		if err := h.Store.AddGroupMember(grp.ID, target.ID); err != nil {
@@ -666,22 +639,12 @@ func (h *Handler) handleGroup(sess ssh.Session, cmd []string, agent *store.Agent
 			writeJSON(sess, map[string]any{"error": "usage: group remove <group> <agent>"})
 			return
 		}
-		grp, err := h.Store.AgentByName(cmd[2])
-		if err != nil {
-			writeErr(sess, err)
+		grp, ok := h.requireAgent(sess, cmd[2])
+		if !ok {
 			return
 		}
-		if grp == nil {
-			writeJSON(sess, map[string]any{"error": fmt.Sprintf("group not found: %s", cmd[2])})
-			return
-		}
-		target, err := h.Store.AgentByName(cmd[3])
-		if err != nil {
-			writeErr(sess, err)
-			return
-		}
-		if target == nil {
-			writeJSON(sess, map[string]any{"error": fmt.Sprintf("agent not found: %s", cmd[3])})
+		target, ok := h.requireAgent(sess, cmd[3])
+		if !ok {
 			return
 		}
 		// Only admin can remove others, members can remove themselves
@@ -709,13 +672,8 @@ func (h *Handler) handleGroup(sess ssh.Session, cmd []string, agent *store.Agent
 			writeJSON(sess, map[string]any{"error": "usage: group members <group>"})
 			return
 		}
-		grp, err := h.Store.AgentByName(cmd[2])
-		if err != nil {
-			writeErr(sess, err)
-			return
-		}
-		if grp == nil {
-			writeJSON(sess, map[string]any{"error": fmt.Sprintf("group not found: %s", cmd[2])})
+		grp, ok := h.requireAgent(sess, cmd[2])
+		if !ok {
 			return
 		}
 		isMember, err := h.Store.IsGroupMember(grp.ID, agent.ID)
@@ -743,13 +701,8 @@ func (h *Handler) handleBoard(sess ssh.Session, cmd []string, agent *store.Agent
 	if len(cmd) >= 2 {
 		boardName = cmd[1]
 	}
-	target, err := h.Store.AgentByName(boardName)
-	if err != nil {
-		writeErr(sess, err)
-		return
-	}
-	if target == nil {
-		writeJSON(sess, map[string]any{"error": fmt.Sprintf("agent not found: %s", boardName)})
+	target, ok := h.requireAgent(sess, boardName)
+	if !ok {
 		return
 	}
 	if !target.Public {
@@ -828,7 +781,7 @@ func (h *Handler) handleInviteCreate(sess ssh.Session, agent *store.Agent) {
 	}
 	writeJSON(sess, map[string]any{
 		"code":   code,
-		"redeem": fmt.Sprintf("ssh -p 2222 <host> invite %s <agent-name> < ~/.ssh/id_ed25519.pub", code),
+		"redeem": fmt.Sprintf("ssh ssh.sshmail.dev invite %s <agent-name> < ~/.ssh/id_ed25519.pub", code),
 	})
 }
 
@@ -1040,6 +993,30 @@ func sanitizeRepoName(name string) string {
 	name = strings.TrimSuffix(name, ".git")
 	name = filepath.Base(name) // prevent path traversal
 	return name
+}
+
+// canAccessMessage checks if an agent can access a message (sender, recipient, or group member).
+func (h *Handler) canAccessMessage(msg *store.Message, agentID int64) bool {
+	if msg.ToID == agentID || msg.FromID == agentID {
+		return true
+	}
+	isMember, _ := h.Store.IsGroupMember(msg.ToID, agentID)
+	return isMember
+}
+
+// requireAgent looks up an agent by name and writes an error to the session if not found.
+// Returns the agent and true on success, or nil and false on failure.
+func (h *Handler) requireAgent(sess ssh.Session, name string) (*store.Agent, bool) {
+	agent, err := h.Store.AgentByName(name)
+	if err != nil {
+		writeErr(sess, err)
+		return nil, false
+	}
+	if agent == nil {
+		writeJSON(sess, map[string]any{"error": fmt.Sprintf("agent not found: %s", name)})
+		return nil, false
+	}
+	return agent, true
 }
 
 func writeJSON(w io.Writer, v any) {

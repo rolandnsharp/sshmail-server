@@ -254,13 +254,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Action != tea.MouseActionPress {
 			break
 		}
-		sidebarWidth := m.width * 35 / 100
-		if sidebarWidth < 20 {
-			sidebarWidth = 20
-		}
-		if sidebarWidth > 40 {
-			sidebarWidth = 40
-		}
+		sidebarWidth := m.sidebarWidth()
 		// Scroll wheel: sidebar or chat depending on mouse position
 		if msg.Button == tea.MouseButtonWheelUp {
 			if msg.X <= sidebarWidth {
@@ -467,50 +461,83 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m Model) View() string {
+// ANSI escape constants used across rendering functions.
+const (
+	topBarBgAnsi = "\033[48;2;107;80;255m" // Charple #6B50FF
+	topBarFgAnsi = "\033[1;38;2;0;0;0m"    // Black bold
+	bgAnsi       = "\033[48;2;31;28;35m"   // Crush background #1F1C23
+)
 
+func (m Model) View() string {
 	if m.width == 0 {
 		return "loading..."
 	}
 
-	line := lipgloss.NewStyle().Background(bg)
-	sidebarWidth := m.width * 30 / 100
-	if sidebarWidth < 20 {
-		sidebarWidth = 20
-	}
-	if sidebarWidth > 35 {
-		sidebarWidth = 35
-	}
+	sidebarWidth := m.sidebarWidth()
 	chatWidth := m.width - sidebarWidth - 1 // 1 for divider
-
-	sep := lipgloss.NewStyle().Foreground(divider).Background(bg).Render("│")
-	channelName := m.channelTitle()
-	if m.focus == focusInput {
-		channelName += " ✎"
-	}
-
-	// Panel = everything except the status bar at the bottom
-	panelHeight := m.height - 1 // 1 row for status bar
-	if panelHeight < 5 {
-		panelHeight = 5
-	}
+	panelHeight := m.panelHeight()
 	inputHeight := m.input.Height()
 	chatHeight := panelHeight - 1 - inputHeight // 1 for channel title, rest for input
 
-	// Sidebar: first line is branding
-	sidebarLines := make([]string, 0, panelHeight)
-	// Top bar — raw ANSI for consistent Charple purple background
-	topBarBgAnsi := "\033[48;2;107;80;255m" // Charple #6B50FF
-	topBarFgAnsi := "\033[1;38;2;0;0;0m"    // Black bold
+	sidebarLines := m.renderSidebar(sidebarWidth, panelHeight)
+	rightLines := m.renderRightPanel(chatWidth, chatHeight, panelHeight, inputHeight)
+
+	// Build all lines: panel rows + status
+	sep := lipgloss.NewStyle().Foreground(divider).Background(bg).Render("│")
+	allLines := make([]string, 0, m.height)
+	for i := 0; i < panelHeight; i++ {
+		allLines = append(allLines, sidebarLines[i]+sep+rightLines[i])
+	}
+	allLines = append(allLines, m.renderStatusBar())
+
+	// Pad each line to full terminal width and fill to full height
+	for i, l := range allLines {
+		w := lipgloss.Width(l)
+		if w < m.width {
+			allLines[i] = l + bgAnsi + strings.Repeat(" ", m.width-w) + "\033[0m"
+		}
+	}
+	for len(allLines) < m.height {
+		allLines = append(allLines, bgAnsi+strings.Repeat(" ", m.width)+"\033[0m")
+	}
+	if len(allLines) > m.height {
+		allLines = allLines[:m.height]
+	}
+	return strings.Join(allLines, "\n")
+}
+
+func (m Model) sidebarWidth() int {
+	w := m.width * 30 / 100
+	if w < 20 {
+		w = 20
+	}
+	if w > 35 {
+		w = 35
+	}
+	return w
+}
+
+func (m Model) panelHeight() int {
+	h := m.height - 1 // 1 row for status bar
+	if h < 5 {
+		h = 5
+	}
+	return h
+}
+
+func (m Model) renderSidebar(sidebarWidth, panelHeight int) []string {
+	line := lipgloss.NewStyle().Background(bg)
+	lines := make([]string, 0, panelHeight)
+
+	// Top bar — branding
 	brandText := topBarBgAnsi + topBarFgAnsi + " sshmail.dev"
-	brandPad := sidebarWidth - 12 // 12 = len(" sshmail.dev")
-	if brandPad > 0 {
-		brandText += strings.Repeat(" ", brandPad)
+	if pad := sidebarWidth - 12; pad > 0 {
+		brandText += strings.Repeat(" ", pad)
 	}
 	brandText += "\033[0m"
-	sidebarLines = append(sidebarLines, brandText)
-	// sbLine renders a single sidebar line, truncated to fit (never wraps)
-	maxText := sidebarWidth - 2 // 2 for padding
+	lines = append(lines, brandText)
+
+	maxText := sidebarWidth - 2
 	truncate := func(s string) string {
 		if len(s) > maxText {
 			return s[:maxText-1] + "…"
@@ -526,7 +553,7 @@ func (m Model) View() string {
 	for idx, item := range items {
 		ci := item.(channelItem)
 		if ci.kind == "spacer" {
-			sidebarLines = append(sidebarLines, sbLine("", line))
+			lines = append(lines, sbLine("", line))
 			continue
 		}
 		if ci.kind == "header" || ci.kind == "hint" {
@@ -535,9 +562,9 @@ func (m Model) View() string {
 				style = hintStyle.Background(bg).Padding(0, 1)
 			}
 			if idx > 0 {
-				sidebarLines = append(sidebarLines, sbLine("", line))
+				lines = append(lines, sbLine("", line))
 			}
-			sidebarLines = append(sidebarLines, sbLine(style.Render(truncate(ci.name)), line))
+			lines = append(lines, sbLine(style.Render(truncate(ci.name)), line))
 			continue
 		}
 		prefix := "  "
@@ -551,39 +578,46 @@ func (m Model) View() string {
 			label += unreadStyle.Render(fmt.Sprintf(" (%d)", ci.unread))
 		}
 		if idx == sel && m.focus == focusSidebar {
-			sidebarLines = append(sidebarLines, sbLine(label,
+			lines = append(lines, sbLine(label,
 				lipgloss.NewStyle().Background(bgHighlight).Foreground(accent).Bold(true).Padding(0, 1)))
 		} else if idx == sel {
-			sidebarLines = append(sidebarLines, sbLine(label,
+			lines = append(lines, sbLine(label,
 				lipgloss.NewStyle().Background(bgHighlight).Foreground(textBright).Padding(0, 1)))
 		} else {
-			sidebarLines = append(sidebarLines, sbLine(label,
+			lines = append(lines, sbLine(label,
 				line.Foreground(textNormal).Padding(0, 1)))
 		}
 	}
-	emptyLine := line.Width(sidebarWidth).MaxWidth(sidebarWidth).Render("")
-	for len(sidebarLines) < panelHeight {
-		sidebarLines = append(sidebarLines, emptyLine)
-	}
-	if len(sidebarLines) > panelHeight {
-		sidebarLines = sidebarLines[:panelHeight]
-	}
 
-	// Right side: channel title + chat lines + input line
-	rightLines := make([]string, 0, panelHeight)
-	// Channel title as first right line (matches branding on left)
+	emptyLine := line.Width(sidebarWidth).MaxWidth(sidebarWidth).Render("")
+	for len(lines) < panelHeight {
+		lines = append(lines, emptyLine)
+	}
+	if len(lines) > panelHeight {
+		lines = lines[:panelHeight]
+	}
+	return lines
+}
+
+func (m Model) renderRightPanel(chatWidth, chatHeight, panelHeight, inputHeight int) []string {
+	lines := make([]string, 0, panelHeight)
+
+	// Channel title bar
+	channelName := m.channelTitle()
+	if m.focus == focusInput {
+		channelName += " ✎"
+	}
 	chanText := topBarBgAnsi + topBarFgAnsi + " " + channelName
-	chanPad := chatWidth - lipgloss.Width(" "+channelName)
-	if chanPad > 0 {
-		chanText += strings.Repeat(" ", chanPad)
+	if pad := chatWidth - lipgloss.Width(" "+channelName); pad > 0 {
+		chanText += strings.Repeat(" ", pad)
 	}
 	chanText += "\033[0m"
-	rightLines = append(rightLines, chanText)
-	// Render viewport — re-inject black bg after every ANSI reset
+	lines = append(lines, chanText)
+
+	// Viewport — re-inject bg after every ANSI reset
 	// Glamour uses \033[m (short form), lipgloss uses \033[0m — normalize then replace
-	bgAnsi := "\033[48;2;31;28;35m"
 	vpContent := m.viewport.View()
-	vpContent = strings.ReplaceAll(vpContent, "\033[0m", "\033[m")  // normalize
+	vpContent = strings.ReplaceAll(vpContent, "\033[0m", "\033[m")
 	vpContent = strings.ReplaceAll(vpContent, "\033[m", "\033[m"+bgAnsi)
 	vpLines := strings.Split(vpContent, "\n")
 	for i := 0; i < chatHeight; i++ {
@@ -593,12 +627,13 @@ func (m Model) View() string {
 			if pad < 0 {
 				pad = 0
 			}
-			rightLines = append(rightLines, bgAnsi+vpLines[i]+bgAnsi+strings.Repeat(" ", pad)+"\033[0m")
+			lines = append(lines, bgAnsi+vpLines[i]+bgAnsi+strings.Repeat(" ", pad)+"\033[0m")
 		} else {
-			rightLines = append(rightLines, bgAnsi+strings.Repeat(" ", chatWidth)+"\033[0m")
+			lines = append(lines, bgAnsi+strings.Repeat(" ", chatWidth)+"\033[0m")
 		}
 	}
-	// Input area at bottom of right panel — use textarea View() for cursor, fix bg with ANSI replacement
+
+	// Input area
 	inputBgColor := lipgloss.Color("#2D2C35") // BBQ
 	inputBgAnsi := "\033[48;2;45;44;53m"      // BBQ #2D2C35
 	inputView := m.input.View()
@@ -609,39 +644,21 @@ func (m Model) View() string {
 	}
 	for _, il := range inputViewLines {
 		rendered := inputBgAnsi + lipgloss.NewStyle().Background(inputBgColor).Width(chatWidth).Padding(0, 1).Render(il) + "\033[0m"
-		rightLines = append(rightLines, rendered)
+		lines = append(lines, rendered)
 	}
 
-	// Build all lines: panel rows + status
-	allLines := make([]string, 0, m.height)
-	for i := 0; i < panelHeight; i++ {
-		allLines = append(allLines, sidebarLines[i]+sep+rightLines[i])
-	}
-	// Status bar — raw ANSI for consistent background
+	return lines
+}
+
+func (m Model) renderStatusBar() string {
 	statusBgAnsi := "\033[48;2;107;80;255m"  // Charple #6B50FF
 	statusFgAnsi := "\033[38;2;223;219;221m" // textBright
-	statusContent := " " + m.status + "  " + m.helpText()
-	statusPad := m.width - lipgloss.Width(statusContent)
-	if statusPad < 0 {
-		statusPad = 0
+	content := " " + m.status + "  " + m.helpText()
+	pad := m.width - lipgloss.Width(content)
+	if pad < 0 {
+		pad = 0
 	}
-	allLines = append(allLines, statusBgAnsi+statusFgAnsi+statusContent+strings.Repeat(" ", statusPad)+"\033[0m")
-
-	// Pad each line to full terminal width and fill to full height
-	bgAnsiPad := "\033[48;2;31;28;35m" // Black
-	for i, l := range allLines {
-		w := lipgloss.Width(l)
-		if w < m.width {
-			allLines[i] = l + bgAnsiPad + strings.Repeat(" ", m.width-w) + "\033[0m"
-		}
-	}
-	for len(allLines) < m.height {
-		allLines = append(allLines, bgAnsiPad+strings.Repeat(" ", m.width)+"\033[0m")
-	}
-	if len(allLines) > m.height {
-		allLines = allLines[:m.height]
-	}
-	return strings.Join(allLines, "\n")
+	return statusBgAnsi + statusFgAnsi + content + strings.Repeat(" ", pad) + "\033[0m"
 }
 
 // syncSelection loads the channel matching the current sidebar highlight.
@@ -689,19 +706,11 @@ func (m Model) helpText() string {
 // --- Layout ---
 
 func (m *Model) updateLayout() {
-	sidebarWidth := m.width * 30 / 100
-	if sidebarWidth < 20 {
-		sidebarWidth = 20
-	}
-	if sidebarWidth > 35 {
-		sidebarWidth = 35
-	}
-
+	sidebarWidth := m.sidebarWidth()
 	chatWidth := m.width - sidebarWidth - 3 // 1 divider + 2 padding
-	panelHeight := m.height - 1             // 1 row for status bar
+	panelHeight := m.panelHeight()
 	inputHeight := m.input.Height()
 	chatHeight := panelHeight - 1 - inputHeight // branding row + input rows
-
 	if chatHeight < 3 {
 		chatHeight = 3
 	}
