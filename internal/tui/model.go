@@ -15,57 +15,19 @@ import (
 
 // --- Styles ---
 
-// Dark theme — inspired by Charmbracelet Crush
+// CharmTone palette — matching Crush
 var (
-	bgDark      = lipgloss.Color("#1a1b26")
-	bgPanel     = lipgloss.Color("#24283b")
-	bgHighlight = lipgloss.Color("#2f3349")
-	border      = lipgloss.Color("#414868")
-	borderFocus = lipgloss.Color("#7aa2f7")
-	textMuted   = lipgloss.Color("#565f89")
-	textNormal  = lipgloss.Color("#a9b1d6")
-	textBright  = lipgloss.Color("#c0caf5")
-	accent      = lipgloss.Color("#bb9af7")
-	accentWarm  = lipgloss.Color("#e0af68")
-	accentGreen = lipgloss.Color("#9ece6a")
-	accentPink  = lipgloss.Color("#f7768e")
-	accentCyan  = lipgloss.Color("#7dcfff")
-
-	sidebarStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(border).
-			Background(bgPanel).
-			Padding(1, 1)
-
-	sidebarFocusStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(borderFocus).
-				Background(bgPanel).
-				Padding(1, 1)
-
-	chatStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(border).
-			Background(bgDark).
-			Padding(0, 1)
-
-	inputStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(border).
-			Padding(0, 1).
-			Foreground(textBright)
-
-	inputFocusStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(borderFocus).
-			Padding(0, 1).
-			Foreground(textBright)
-
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(accent).
-			Background(bgDark).
-			Padding(0, 1)
+	bg          = lipgloss.Color("#201F26") // Pepper — base background
+	bgHighlight = lipgloss.Color("#3A3943") // Charcoal — selected items
+	divider     = lipgloss.Color("#3A3943") // Charcoal — separator line
+	textMuted   = lipgloss.Color("#858392") // Squid
+	textNormal  = lipgloss.Color("#BFBCC8") // Smoke
+	textBright  = lipgloss.Color("#DFDBDD") // Ash
+	accent      = lipgloss.Color("#6B50FF") // Charple
+	accentWarm  = lipgloss.Color("#FF60FF") // Dolly
+	accentGreen = lipgloss.Color("#68FFD6") // Bok
+	accentPink  = lipgloss.Color("#EB4268") // Sriracha
+	accentCyan  = lipgloss.Color("#00A4FF") // Malibu
 
 	fromStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -78,24 +40,10 @@ var (
 			Foreground(accentPink).
 			Bold(true)
 
-	statusStyle = lipgloss.NewStyle().
-			Foreground(textMuted).
-			Background(bgDark).
-			Padding(0, 1)
-
 	accentStyle = lipgloss.NewStyle().
 			Foreground(textMuted).
 			Bold(true).
 			PaddingTop(1)
-
-	helpStyle = lipgloss.NewStyle().
-			Foreground(textMuted).
-			Background(bgDark).
-			Padding(0, 1)
-
-	helpKeyStyle = lipgloss.NewStyle().
-			Foreground(textBright).
-			Background(bgDark)
 
 	hintStyle = lipgloss.NewStyle().
 			Foreground(textMuted).
@@ -197,6 +145,7 @@ func NewModel(backend Backend) Model {
 		Padding(0, 0, 0, 1)
 	delegate.Styles.NormalTitle = lipgloss.NewStyle().
 		Foreground(textBright).
+		Background(bg).
 		Padding(0, 0, 0, 2)
 	sidebar := list.New([]list.Item{}, delegate, 0, 0)
 	sidebar.SetShowTitle(true)
@@ -212,8 +161,11 @@ func NewModel(backend Backend) Model {
 	input := textarea.New()
 	input.Placeholder = "type a message..."
 	input.ShowLineNumbers = false
-	input.SetHeight(3)
+	input.SetHeight(2)
 	input.CharLimit = 4096
+	input.MaxHeight = 6
+	// Shift+Enter inserts newline; Enter handled by us to send
+	input.KeyMap.InsertNewline.SetKeys("shift+enter")
 
 	vp := viewport.New(0, 0)
 
@@ -286,6 +238,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if sidebarWidth > 40 {
 			sidebarWidth = 40
 		}
+		// Scroll wheel: sidebar or chat depending on mouse position
+		if msg.Button == tea.MouseButtonWheelUp {
+			if msg.X <= sidebarWidth {
+				m.sidebar.CursorUp()
+				if cmd := m.syncSelection(); cmd != nil {
+					return m, cmd
+				}
+				return m, nil
+			} else {
+				m.viewport.LineUp(3)
+				return m, nil
+			}
+		}
+		if msg.Button == tea.MouseButtonWheelDown {
+			if msg.X <= sidebarWidth {
+				m.sidebar.CursorDown()
+				if cmd := m.syncSelection(); cmd != nil {
+					return m, cmd
+				}
+				return m, nil
+			} else {
+				m.viewport.LineDown(3)
+				return m, nil
+			}
+		}
 		if msg.X > sidebarWidth {
 			m.focus = focusInput
 			cmd := m.input.Focus()
@@ -295,8 +272,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focus = focusSidebar
 			m.input.Blur()
 			m.sidebar.SetDelegate(activeDelegate())
-			// Sidebar layout: border(1) + padding(1) + title(1) + title padding-bottom(1) = 4 lines before items
-			// The list also has a 1-line gap after title internally
 			topOffset := 5
 			clickedItem := msg.Y - topOffset
 			if clickedItem >= 0 && clickedItem < len(m.sidebar.Items()) {
@@ -329,6 +304,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				text := strings.TrimSpace(m.input.Value())
 				if text != "" {
 					m.input.Reset()
+					m.input.SetHeight(2)
+					m.updateLayout()
 					if m.me != nil {
 						optimistic := Message{
 							From: m.me.Name,
@@ -361,9 +338,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, fetchCmd)
 			}
 		} else {
+			prevHeight := m.input.Height()
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			cmds = append(cmds, cmd)
+			if m.input.Height() != prevHeight {
+				m.updateLayout()
+			}
 		}
 		return m, tea.Batch(cmds...)
 
@@ -445,39 +426,135 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
+
 	if m.width == 0 {
 		return "loading..."
 	}
 
-	sidebarWidth := m.width * 35 / 100
+	line := lipgloss.NewStyle().Background(bg)
+	sidebarWidth := m.width * 30 / 100
 	if sidebarWidth < 20 {
 		sidebarWidth = 20
 	}
-	if sidebarWidth > 40 {
-		sidebarWidth = 40
+	if sidebarWidth > 35 {
+		sidebarWidth = 35
 	}
-	sbStyle := sidebarStyle
-	if m.focus == focusSidebar {
-		sbStyle = sidebarFocusStyle
-	}
-	sidebarContent := sbStyle.Width(sidebarWidth - 4).Render(m.sidebar.View())
+	chatWidth := m.width - sidebarWidth - 1 // 1 for divider
 
-	chatWidth := m.width - sidebarWidth - 2
-
-	title := titleStyle.Width(chatWidth - 2).Render(m.channelTitle())
-	chatContent := chatStyle.Width(chatWidth - 4).Render(m.viewport.View())
-
-	inStyle := inputStyle
+	sep := lipgloss.NewStyle().Foreground(divider).Background(bg).Render("│")
+	channelName := m.channelTitle()
 	if m.focus == focusInput {
-		inStyle = inputFocusStyle
+		channelName += " ✎"
 	}
-	inputContent := inStyle.Width(chatWidth - 2).Render(m.input.View())
 
-	rightPanel := lipgloss.JoinVertical(lipgloss.Left, title, chatContent, inputContent)
-	main := lipgloss.JoinHorizontal(lipgloss.Top, sidebarContent, rightPanel)
+	// Panel = everything except the status bar at the bottom
+	panelHeight := m.height - 3 // just 1 row for status
+	if panelHeight < 5 {
+		panelHeight = 5
+	}
+	chatHeight := panelHeight - 2 // 1 for channel title, 1 for input
 
-	statusAndHelp := statusStyle.Width(m.width).Render(" " + m.status + "  " + m.helpText())
-	return lipgloss.JoinVertical(lipgloss.Left, main, statusAndHelp)
+	// Sidebar: first line is branding
+	sidebarLines := make([]string, 0, panelHeight)
+	sidebarLines = append(sidebarLines,
+		lipgloss.NewStyle().Bold(true).Foreground(accent).Background(bgHighlight).
+			Width(sidebarWidth).MaxWidth(sidebarWidth).Render(" sshmail.dev"))
+	// sbLine renders a single sidebar line, truncated to fit (never wraps)
+	maxText := sidebarWidth - 2 // 2 for padding
+	truncate := func(s string) string {
+		if len(s) > maxText {
+			return s[:maxText-1] + "…"
+		}
+		return s
+	}
+	sbLine := func(text string, style lipgloss.Style) string {
+		return style.Width(sidebarWidth).MaxWidth(sidebarWidth).Render(text)
+	}
+
+	items := m.sidebar.Items()
+	sel := m.sidebar.Index()
+	for idx, item := range items {
+		ci := item.(channelItem)
+		if ci.kind == "header" || ci.kind == "hint" {
+			style := lipgloss.NewStyle().Foreground(textMuted).Bold(true).Background(bg).Padding(0, 1)
+			if ci.kind == "hint" {
+				style = hintStyle.Background(bg).Padding(0, 1)
+			}
+			if idx > 0 {
+				sidebarLines = append(sidebarLines, sbLine("", line))
+			}
+			sidebarLines = append(sidebarLines, sbLine(style.Render(truncate(ci.name)), line))
+			continue
+		}
+		prefix := "  "
+		if ci.kind == "group" {
+			prefix = "# "
+		} else if ci.kind == "board" {
+			prefix = "@ "
+		}
+		label := truncate(prefix + ci.name)
+		if ci.unread > 0 {
+			label += unreadStyle.Render(fmt.Sprintf(" (%d)", ci.unread))
+		}
+		if idx == sel && m.focus == focusSidebar {
+			sidebarLines = append(sidebarLines, sbLine(label,
+				lipgloss.NewStyle().Background(bgHighlight).Foreground(accent).Bold(true).Padding(0, 1)))
+		} else if idx == sel {
+			sidebarLines = append(sidebarLines, sbLine(label,
+				lipgloss.NewStyle().Background(bgHighlight).Foreground(textBright).Padding(0, 1)))
+		} else {
+			sidebarLines = append(sidebarLines, sbLine(label,
+				line.Foreground(textNormal).Padding(0, 1)))
+		}
+	}
+	emptyLine := line.Width(sidebarWidth).MaxWidth(sidebarWidth).Render("")
+	for len(sidebarLines) < panelHeight {
+		sidebarLines = append(sidebarLines, emptyLine)
+	}
+	if len(sidebarLines) > panelHeight {
+		sidebarLines = sidebarLines[:panelHeight]
+	}
+
+	// Right side: channel title + chat lines + input line
+	chatLineStyle := lipgloss.NewStyle().Background(bg).Width(chatWidth).MaxWidth(chatWidth).Padding(0, 1)
+	rightLines := make([]string, 0, panelHeight)
+	// Channel title as first right line (matches branding on left)
+	rightLines = append(rightLines,
+		lipgloss.NewStyle().Bold(true).Foreground(textBright).Background(bgHighlight).
+			Width(chatWidth).MaxWidth(chatWidth).Render(" "+channelName))
+	chatLines := strings.Split(strings.TrimRight(m.viewport.View(), "\n"), "\n")
+	for i := 0; i < chatHeight && i < len(chatLines); i++ {
+		rightLines = append(rightLines, chatLineStyle.Render(chatLines[i]))
+	}
+	for len(rightLines) < chatHeight { // fill up to input
+		rightLines = append(rightLines, chatLineStyle.Render(""))
+	}
+	// Input area at bottom of right panel
+	inputView := m.input.View()
+	inputViewLines := strings.Split(inputView, "\n")
+	inputHeight := m.input.Height()
+	if len(inputViewLines) > inputHeight {
+		inputViewLines = inputViewLines[:inputHeight]
+	}
+	for _, il := range inputViewLines {
+		rendered := lipgloss.NewStyle().Background(bg).Width(chatWidth).Padding(0, 1).Render(il)
+		rightLines = append(rightLines, rendered)
+	}
+
+	// Build all lines: panel rows + status
+	allLines := make([]string, 0, m.height)
+	for i := 0; i < panelHeight; i++ {
+		allLines = append(allLines, sidebarLines[i]+sep+rightLines[i])
+	}
+	allLines = append(allLines, lipgloss.NewStyle().Foreground(textMuted).Background(bgHighlight).
+		Width(m.width).
+		Render(" "+m.status+"  "+m.helpText()))
+
+	// Cap to terminal height
+	if len(allLines) > m.height {
+		allLines = allLines[:m.height]
+	}
+	return strings.Join(allLines, "\n")
 }
 
 // syncSelection loads the channel matching the current sidebar highlight.
@@ -497,68 +574,73 @@ func (m *Model) syncSelection() tea.Cmd {
 }
 
 func (m Model) helpText() string {
+	key := lipgloss.NewStyle().Foreground(textBright)
 	sep := " · "
 	if m.focus == focusInput {
-		return helpKeyStyle.Render("enter") + " send" + sep +
-			helpKeyStyle.Render("tab") + " sidebar" + sep +
-			helpKeyStyle.Render("esc") + " escape"
+		return key.Render("enter") + " send" + sep +
+			key.Render("shift+enter") + " newline" + sep +
+			key.Render("tab") + " sidebar" + sep +
+			key.Render("esc") + " escape"
 	}
-	return helpKeyStyle.Render("↑↓") + " navigate" + sep +
-		helpKeyStyle.Render("enter") + " select" + sep +
-		helpKeyStyle.Render("tab") + " write" + sep +
-		helpKeyStyle.Render("esc") + " escape"
+	return key.Render("↑↓") + " navigate" + sep +
+		key.Render("enter") + " select" + sep +
+		key.Render("tab") + " write" + sep +
+		key.Render("esc") + " escape"
 }
 
 // --- Layout ---
 
 func (m *Model) updateLayout() {
-	sidebarWidth := m.width * 35 / 100
+	sidebarWidth := m.width * 30 / 100
 	if sidebarWidth < 20 {
 		sidebarWidth = 20
 	}
-	if sidebarWidth > 40 {
-		sidebarWidth = 40
+	if sidebarWidth > 35 {
+		sidebarWidth = 35
 	}
 
-	chatWidth := m.width - sidebarWidth - 8
-	// 1 status/help line + 1 title + 3 input + borders/padding
-	chatHeight := m.height - 14
+	chatWidth := m.width - sidebarWidth - 3 // 1 divider + 2 padding
+	panelHeight := m.height - 3             // just status bar
+	inputHeight := m.input.Height()
+	chatHeight := panelHeight - 1 - inputHeight // branding row + input rows
 
-	if chatHeight < 5 {
-		chatHeight = 5
+	if chatHeight < 3 {
+		chatHeight = 3
 	}
 
-	// Sidebar list height: right panel = title(1) + chat(chatHeight+2border) + input(3+2border) = chatHeight+8
-	// Sidebar rendered = list + border(2) + padding(2) = list + 4
-	// list includes title(2 lines). So list height = chatHeight + 8 - 4 = chatHeight + 4
-	// But title takes 2 lines inside list, so item area = chatHeight + 2
-	sidebarHeight := chatHeight + 2
-	m.sidebar.SetSize(sidebarWidth-4, sidebarHeight)
+	m.sidebar.SetSize(sidebarWidth, panelHeight)
 	m.viewport.Width = chatWidth
 	m.viewport.Height = chatHeight
 	m.input.SetWidth(chatWidth)
 	m.renderMessages()
 }
 
+// wrapText wraps s at word boundaries using lipgloss.
+func wrapText(s string, maxWidth int) string {
+	return lipgloss.NewStyle().Width(maxWidth).Render(s)
+}
+
 // --- Rendering ---
 
 func (m *Model) renderMessages() {
-	fileStyle := lipgloss.NewStyle().Foreground(accentWarm).Background(bgDark)
-	lineStyle := lipgloss.NewStyle().Background(bgDark).Width(m.viewport.Width)
+	fileStyle := lipgloss.NewStyle().Foreground(accentWarm)
 
 	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithWordWrap(m.viewport.Width-20),
+		glamour.WithWordWrap(m.viewport.Width-10),
 		glamour.WithStylePath("dark"),
 	)
 
 	var sb strings.Builder
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		msg := m.messages[i]
-		ts := timeStyle.Background(bgDark).Render(msg.At.Local().Format("15:04"))
-		from := fromStyle.Background(bgDark).Render(msg.From)
+		ts := timeStyle.Render(msg.At.Local().Format("15:04"))
+		from := fromStyle.Render(msg.From)
+		header := fmt.Sprintf("%s %s:", ts, from)
 
 		body := msg.Body
-		if renderer != nil {
+		isSimple := !strings.Contains(body, "\n") && !strings.Contains(body, "```")
+
+		if !isSimple && renderer != nil {
 			if rendered, err := renderer.Render(body); err == nil {
 				body = strings.TrimSpace(rendered)
 			}
@@ -568,11 +650,16 @@ func (m *Model) renderMessages() {
 			body += fileStyle.Render(fmt.Sprintf(" [%s]", *msg.File))
 		}
 
-		header := fmt.Sprintf("%s %s:", ts, from)
-		if !strings.Contains(body, "\n") && len(body) < 80 {
-			sb.WriteString(lineStyle.Render(header+" "+body) + "\n")
+		if isSimple {
+			maxWidth := m.viewport.Width - 2
+			line := header + " " + body
+			if len(line) <= maxWidth {
+				sb.WriteString(line + "\n")
+			} else {
+				sb.WriteString(header + "\n" + wrapText(body, maxWidth) + "\n")
+			}
 		} else {
-			sb.WriteString(lineStyle.Render(header) + "\n" + body + "\n")
+			sb.WriteString(header + "\n" + body + "\n")
 		}
 	}
 	m.viewport.SetContent(sb.String())
@@ -792,6 +879,7 @@ func activeDelegate() list.DefaultDelegate {
 		Padding(0, 0, 0, 1)
 	d.Styles.NormalTitle = lipgloss.NewStyle().
 		Foreground(textBright).
+		Background(bg).
 		Padding(0, 0, 0, 2)
 	return d
 }
@@ -807,6 +895,7 @@ func dimDelegate() list.DefaultDelegate {
 		Padding(0, 1)
 	d.Styles.NormalTitle = lipgloss.NewStyle().
 		Foreground(textMuted).
+		Background(bg).
 		Padding(0, 1)
 	return d
 }
