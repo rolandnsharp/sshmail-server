@@ -180,6 +180,15 @@ func NewModel(backend Backend) Model {
 	input.MaxHeight = 6
 	// Shift+Enter inserts newline; Enter handled by us to send
 	input.KeyMap.InsertNewline.SetKeys("shift+enter")
+	// Style the input area with theme background
+	inputBg := lipgloss.Color("#2D2C35") // BBQ — input area background
+	input.FocusedStyle.Base = lipgloss.NewStyle().Background(inputBg)
+	input.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(textMuted).Background(inputBg)
+	input.FocusedStyle.Text = lipgloss.NewStyle().Foreground(textBright).Background(inputBg)
+	input.FocusedStyle.CursorLine = lipgloss.NewStyle().Background(inputBg)
+	input.BlurredStyle.Base = lipgloss.NewStyle().Background(inputBg)
+	input.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(textMuted).Background(inputBg)
+	input.BlurredStyle.Text = lipgloss.NewStyle().Foreground(textNormal).Background(inputBg)
 
 	vp := viewport.New(0, 0)
 
@@ -546,16 +555,26 @@ func (m Model) View() string {
 	for len(rightLines) < chatHeight { // fill up to input
 		rightLines = append(rightLines, chatLineStyle.Render(""))
 	}
-	// Input area at bottom of right panel
-	inputView := m.input.View()
-	inputViewLines := strings.Split(inputView, "\n")
+	// Input area at bottom of right panel — render with raw ANSI for full background
+	inputBgAnsi := "\033[48;2;45;44;53m" // BBQ #2D2C35
+	val := m.input.Value()
+	inputLines := strings.Split(val, "\n")
 	inputHeight := m.input.Height()
-	if len(inputViewLines) > inputHeight {
-		inputViewLines = inputViewLines[:inputHeight]
-	}
-	for _, il := range inputViewLines {
-		rendered := lipgloss.NewStyle().Background(bg).Width(chatWidth).Padding(0, 1).Render(il)
-		rightLines = append(rightLines, rendered)
+	for i := 0; i < inputHeight; i++ {
+		content := ""
+		if i < len(inputLines) {
+			content = inputLines[i]
+		}
+		if content == "" && i == 0 && val == "" {
+			content = "\033[38;2;133;131;146mtype a message...\033[0m"
+		}
+		// Pad to full chat width with background
+		pad := chatWidth - lipgloss.Width(content) - 2 // 2 for left padding
+		if pad < 0 {
+			pad = 0
+		}
+		line := inputBgAnsi + " " + content + strings.Repeat(" ", pad+1) + "\033[0m"
+		rightLines = append(rightLines, line)
 	}
 
 	// Build all lines: panel rows + status
