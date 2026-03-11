@@ -21,6 +21,7 @@ import (
 	"github.com/rolandnsharp/sshmail-server/internal/api"
 	"github.com/rolandnsharp/sshmail-server/internal/auth"
 	"github.com/rolandnsharp/sshmail-server/internal/config"
+	"github.com/rolandnsharp/sshmail-server/internal/notify"
 	"github.com/rolandnsharp/sshmail-server/internal/store"
 	"github.com/rolandnsharp/sshmail-server/internal/tui"
 )
@@ -56,7 +57,12 @@ func main() {
 		seedAdmin(db, cfg.AdminKey)
 	}
 
-	handler := &api.Handler{Store: db, DataDir: cfg.DataDir, Events: api.NewHub()}
+	emailNotifier := notify.New(cfg.ResendAPIKey, cfg.ResendFrom)
+	if emailNotifier != nil {
+		log.Println("Email notifications enabled (Resend)")
+	}
+
+	handler := &api.Handler{Store: db, DataDir: cfg.DataDir, Events: api.NewHub(), Notifier: emailNotifier}
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	srv, err := wish.NewServer(

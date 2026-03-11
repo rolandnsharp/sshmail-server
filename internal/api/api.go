@@ -16,6 +16,7 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/rolandnsharp/sshmail-server/internal/auth"
+	"github.com/rolandnsharp/sshmail-server/internal/notify"
 	"github.com/rolandnsharp/sshmail-server/internal/store"
 )
 
@@ -77,9 +78,10 @@ func (h *Hub) Notify(agentIDs []int64, evt Event) {
 }
 
 type Handler struct {
-	Store   store.Store
-	DataDir string
-	Events  *Hub
+	Store    store.Store
+	DataDir  string
+	Events   *Hub
+	Notifier *notify.Notifier // nil means email notifications disabled
 }
 
 func (h *Handler) Handle(sess ssh.Session) {
@@ -113,6 +115,8 @@ func (h *Handler) Handle(sess ssh.Session) {
 		h.handlePubkey(sess, cmd)
 	case "bio":
 		h.handleBio(sess, cmd, agent)
+	case "email":
+		h.handleEmail(sess, cmd, agent)
 	case "send":
 		h.handleSend(sess, cmd, agent)
 	case "inbox":
@@ -167,6 +171,9 @@ func (h *Handler) handleHelp(sess ssh.Session) {
 			{"cmd": "pubkey <agent>", "desc": "get an agent's public key (for encryption)"},
 			{"cmd": "whoami", "desc": "show your agent info"},
 			{"cmd": "bio <text>", "desc": "set your bio"},
+			{"cmd": "email", "desc": "show your email"},
+			{"cmd": "email <address>", "desc": "set email for notifications"},
+			{"cmd": "email clear", "desc": "remove your email"},
 			{"cmd": "addkey", "desc": "add an SSH key (pipe pubkey to stdin)"},
 			{"cmd": "keys", "desc": "list your SSH keys"},
 			{"cmd": "invite", "desc": "generate an invite code"},
@@ -218,6 +225,46 @@ func (h *Handler) handleBio(sess ssh.Session, cmd []string, agent *store.Agent) 
 		return
 	}
 	writeJSON(sess, map[string]any{"ok": true})
+}
+
+func (h *Handler) handleEmail(sess ssh.Session, cmd []string, agent *store.Agent) {
+	if len(cmd) < 2 {
+		// Show current email
+		if agent.Email != nil {
+			writeJSON(sess, map[string]any{"email": *agent.Email})
+		} else {
+			writeJSON(sess, map[string]any{"email": nil})
+		}
+		return
+	}
+	if cmd[1] == "clear" {
+		if err := h.Store.UpdateEmail(agent.ID, nil); err != nil {
+			writeErr(sess, err)
+			return
+		}
+		writeJSON(sess, map[string]any{"ok": true, "email": nil})
+		return
+	}
+	email := cmd[1]
+	if !strings.Contains(email, "@") {
+		writeJSON(sess, map[string]any{"error": "invalid email address"})
+		return
+	}
+	// Check uniqueness
+	existing, err := h.Store.AgentByEmail(email)
+	if err != nil {
+		writeErr(sess, err)
+		return
+	}
+	if existing != nil && existing.ID != agent.ID {
+		writeJSON(sess, map[string]any{"error": "email already in use by another agent"})
+		return
+	}
+	if err := h.Store.UpdateEmail(agent.ID, &email); err != nil {
+		writeErr(sess, err)
+		return
+	}
+	writeJSON(sess, map[string]any{"ok": true, "email": email})
 }
 
 func (h *Handler) handleAddKey(sess ssh.Session, agent *store.Agent) {
@@ -364,6 +411,43 @@ func (h *Handler) handleSend(sess ssh.Session, cmd []string, agent *store.Agent)
 			} else {
 				// DM: notify recipient and sender
 				h.Events.Notify([]int64{to.ID, agent.ID}, evt)
+			}
+		}()
+	}
+
+	// Email notifications (non-blocking, non-fatal)
+	if h.Notifier != nil {
+		go func() {
+			if to.Public || to.PublicKey == "" {
+				// Group/board: email all members except sender
+				members, err := h.Store.GroupMembers(to.ID)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "email notify: list members: %v\n", err)
+					return
+				}
+				for _, m := range members {
+					if m.AgentID == agent.ID {
+						continue
+					}
+					member, err := h.Store.AgentByID(m.AgentID)
+					if err != nil || member == nil || member.Email == nil {
+						continue
+					}
+					subject := fmt.Sprintf("New message in %s from %s", to.Name, agent.Name)
+					body := fmt.Sprintf("%s wrote in %s:\n\n%s", agent.Name, to.Name, message)
+					if err := h.Notifier.Send(*member.Email, subject, body); err != nil {
+						fmt.Fprintf(os.Stderr, "email notify %s: %v\n", *member.Email, err)
+					}
+				}
+			} else {
+				// DM: email the recipient if they have an email set
+				if to.Email != nil {
+					subject := fmt.Sprintf("New message from %s", agent.Name)
+					body := fmt.Sprintf("%s sent you a message:\n\n%s", agent.Name, message)
+					if err := h.Notifier.Send(*to.Email, subject, body); err != nil {
+						fmt.Fprintf(os.Stderr, "email notify %s: %v\n", *to.Email, err)
+					}
+				}
 			}
 		}()
 	}

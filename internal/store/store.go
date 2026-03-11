@@ -8,6 +8,7 @@ type Agent struct {
 	Fingerprint string    `json:"fingerprint,omitempty"`
 	PublicKey   string    `json:"-"`
 	Bio         string    `json:"bio,omitempty"`
+	Email       *string   `json:"email,omitempty"`
 	Public      bool      `json:"public,omitempty"`
 	JoinedAt    time.Time `json:"joined_at"`
 	InvitedBy   int64     `json:"invited_by,omitempty"`
@@ -47,6 +48,8 @@ type Store interface {
 	CreateAgent(name, fingerprint, publicKey string, invitedBy int64) (*Agent, error)
 	CreateChannel(name, bio string) (*Agent, error)
 	UpdateBio(id int64, bio string) error
+	UpdateEmail(id int64, email *string) error
+	AgentByEmail(email string) (*Agent, error)
 	ListAgents() ([]Agent, error)
 
 	// Messages

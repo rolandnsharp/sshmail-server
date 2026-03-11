@@ -68,5 +68,12 @@ func migrate(db *sql.DB) error {
 		SELECT id, fingerprint, public_key FROM agents
 		WHERE public_key != '' AND fingerprint NOT LIKE 'group:%'
 	`)
+	if err != nil {
+		return err
+	}
+
+	// Add email column to agents (ignore error if column already exists)
+	db.Exec(`ALTER TABLE agents ADD COLUMN email TEXT DEFAULT NULL`)
+	_, err = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_email ON agents(email) WHERE email IS NOT NULL`)
 	return err
 }

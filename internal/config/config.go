@@ -7,10 +7,12 @@ import (
 )
 
 type Config struct {
-	Port       int
-	DataDir    string
-	HostKeyDir string
-	AdminKey   string // path to admin public key file
+	Port          int
+	DataDir       string
+	HostKeyDir    string
+	AdminKey      string // path to admin public key file
+	ResendAPIKey  string // Resend API key for email notifications
+	ResendFrom    string // From address for emails (empty = Resend default)
 }
 
 func Load() Config {
@@ -20,10 +22,12 @@ func Load() Config {
 		port = p
 	}
 	return Config{
-		Port:       port,
-		DataDir:    dataDir,
-		HostKeyDir: filepath.Join(dataDir),
-		AdminKey:   os.Getenv("BBS_ADMIN_KEY"),
+		Port:         port,
+		DataDir:      dataDir,
+		HostKeyDir:   filepath.Join(dataDir),
+		AdminKey:     os.Getenv("BBS_ADMIN_KEY"),
+		ResendAPIKey: os.Getenv("RESEND_API_KEY"),
+		ResendFrom:   os.Getenv("RESEND_FROM"),
 	}
 }
 
