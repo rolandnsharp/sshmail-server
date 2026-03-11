@@ -369,7 +369,8 @@ func (h *Handler) handleSend(sess ssh.Session, cmd []string, agent *store.Agent)
 			writeErr(sess, err)
 			return
 		}
-		if _, err := io.Copy(f, sess); err != nil {
+		// Limit file uploads to 50MB
+		if _, err := io.Copy(f, io.LimitReader(sess, 50<<20)); err != nil {
 			f.Close()
 			os.Remove(diskPath)
 			writeErr(sess, err)
@@ -684,16 +685,19 @@ func (h *Handler) handleGroup(sess ssh.Session, cmd []string, agent *store.Agent
 			return
 		}
 		// Only admin can remove others, members can remove themselves
-		if target.ID != agent.ID {
-			role, err := h.Store.GroupRole(grp.ID, agent.ID)
-			if err != nil {
-				writeErr(sess, err)
-				return
-			}
-			if role != "admin" {
-				writeJSON(sess, map[string]any{"error": "only the group admin can remove others"})
-				return
-			}
+		role, err := h.Store.GroupRole(grp.ID, agent.ID)
+		if err != nil {
+			writeErr(sess, err)
+			return
+		}
+		if target.ID != agent.ID && role != "admin" {
+			writeJSON(sess, map[string]any{"error": "only the group admin can remove others"})
+			return
+		}
+		// Prevent admin from orphaning the group
+		if target.ID == agent.ID && role == "admin" {
+			writeJSON(sess, map[string]any{"error": "admin cannot leave the group — transfer admin first"})
+			return
 		}
 		if err := h.Store.RemoveGroupMember(grp.ID, target.ID); err != nil {
 			writeErr(sess, err)
@@ -831,6 +835,18 @@ func (h *Handler) handleInviteCreate(sess ssh.Session, agent *store.Agent) {
 func (h *Handler) handleInviteRedeem(sess ssh.Session, cmd []string) {
 	code := cmd[1]
 	name := cmd[2]
+
+	// Validate agent name: alphanumeric, hyphens, underscores, 1-32 chars
+	if len(name) == 0 || len(name) > 32 {
+		writeJSON(sess, map[string]any{"error": "name must be 1-32 characters"})
+		return
+	}
+	for _, c := range name {
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			writeJSON(sess, map[string]any{"error": "name must be lowercase alphanumeric, hyphens, or underscores"})
+			return
+		}
+	}
 
 	pubKeyData, err := io.ReadAll(io.LimitReader(sess, 8192))
 	if err != nil {

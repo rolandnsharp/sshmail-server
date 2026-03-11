@@ -20,6 +20,12 @@ func AgentFromContext(ctx context.Context) *store.Agent {
 	return nil
 }
 
+// SetAgentInContext stores the agent in a context that supports SetValue.
+// This is used by tests and the PublicKeyHandler.
+func SetAgentInContext(ctx ssh.Context, agent *store.Agent) {
+	ctx.SetValue(agentKey, agent)
+}
+
 // PublicKeyHandler accepts all keys but only sets agent context for known ones.
 // This allows unauthenticated users to connect and redeem invites.
 func PublicKeyHandler(s store.Store) func(ctx ssh.Context, key ssh.PublicKey) bool {
