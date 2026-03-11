@@ -417,9 +417,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pollMsg:
 		m.status = fmt.Sprintf("%s — %d unread", m.agentName(), msg.unread)
 		m.updateUnreadCounts(msg.counts)
-		if msg.unread > 0 {
-			cmds = append(cmds, m.fetchChannel(channelItem{name: m.selected, kind: m.selKind}))
-		}
+		cmds = append(cmds, m.fetchChannel(channelItem{name: m.selected, kind: m.selKind}))
 		cmds = append(cmds, m.pollTick())
 
 	case pollErrMsg:
