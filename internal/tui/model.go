@@ -778,16 +778,17 @@ func (m *Model) renderMessages() {
 			body += fileStyle.Render(fmt.Sprintf(" [%s]", *msg.File))
 		}
 
+		margin := "  " // left margin matching glamour style
 		if isSimple {
-			maxWidth := m.viewport.Width - 2
+			maxWidth := m.viewport.Width - 4
 			line := header + " " + body
 			if len(line) <= maxWidth {
-				sb.WriteString(line + "\n")
+				sb.WriteString(margin + line + "\n")
 			} else {
-				sb.WriteString(header + "\n" + wrapText(body, maxWidth) + "\n")
+				sb.WriteString(margin + header + "\n" + margin + wrapText(body, maxWidth) + "\n")
 			}
 		} else {
-			sb.WriteString(header + "\n" + body + "\n")
+			sb.WriteString(margin + header + "\n" + body + "\n")
 		}
 	}
 	m.viewport.SetContent(sb.String())
