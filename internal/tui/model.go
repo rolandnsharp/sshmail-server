@@ -573,9 +573,15 @@ func (m Model) View() string {
 	for i := 0; i < panelHeight; i++ {
 		allLines = append(allLines, sidebarLines[i]+sep+rightLines[i])
 	}
-	allLines = append(allLines, lipgloss.NewStyle().Foreground(textMuted).Background(bgHighlight).
-		Width(m.width).
-		Render(" "+m.status+"  "+m.helpText()))
+	// Status bar — raw ANSI for consistent background
+	statusBgAnsi := "\033[48;2;58;57;67m"    // bgHighlight #3A3943
+	statusFgAnsi := "\033[38;2;133;131;146m" // textMuted
+	statusContent := " " + m.status + "  " + m.helpText()
+	statusPad := m.width - lipgloss.Width(statusContent)
+	if statusPad < 0 {
+		statusPad = 0
+	}
+	allLines = append(allLines, statusBgAnsi+statusFgAnsi+statusContent+strings.Repeat(" ", statusPad)+"\033[0m")
 
 	// Cap to terminal height
 	if len(allLines) > m.height {
@@ -606,18 +612,22 @@ func (m *Model) syncSelection() tea.Cmd {
 }
 
 func (m Model) helpText() string {
-	key := lipgloss.NewStyle().Foreground(textBright)
+	// Use raw ANSI to avoid resets that break status bar background
+	statusBgAnsi := "\033[48;2;58;57;67m" // bgHighlight #3A3943
+	keyStart := "\033[1;38;2;223;219;221m" // textBright #DFDBDD bold
+	keyEnd := "\033[0m" + statusBgAnsi + "\033[38;2;133;131;146m" // reset, restore bg + textMuted
+	key := func(s string) string { return keyStart + s + keyEnd }
 	sep := " · "
 	if m.focus == focusInput {
-		return key.Render("enter") + " send" + sep +
-			key.Render("shift+enter") + " newline" + sep +
-			key.Render("tab") + " sidebar" + sep +
-			key.Render("esc") + " escape"
+		return key("enter") + " send" + sep +
+			key("shift+enter") + " newline" + sep +
+			key("tab") + " sidebar" + sep +
+			key("esc") + " escape"
 	}
-	return key.Render("↑↓") + " navigate" + sep +
-		key.Render("enter") + " select" + sep +
-		key.Render("tab") + " write" + sep +
-		key.Render("esc") + " escape"
+	return key("↑↓") + " navigate" + sep +
+		key("enter") + " select" + sep +
+		key("tab") + " write" + sep +
+		key("esc") + " escape"
 }
 
 // --- Layout ---
