@@ -148,7 +148,7 @@ type Model struct {
 func NewModel(backend Backend) Model {
 	sidebar := list.New([]list.Item{}, activeDelegate(), 0, 0)
 	sidebar.SetShowTitle(true)
-	sidebar.Title = "sshmail.dev"
+	sidebar.Title = "ssh sshmail.dev"
 	sidebar.Styles.Title = lipgloss.NewStyle().
 		Foreground(accent).
 		Bold(true).
@@ -504,8 +504,8 @@ func (m Model) renderSidebar(sidebarWidth, panelHeight int) []string {
 	lines := make([]string, 0, panelHeight)
 
 	// Top bar — branding
-	brandText := topBarBgAnsi + topBarFgAnsi + " sshmail.dev"
-	if pad := sidebarWidth - 12; pad > 0 {
+	brandText := topBarBgAnsi + topBarFgAnsi + " ssh sshmail.dev"
+	if pad := sidebarWidth - 16; pad > 0 {
 		brandText += strings.Repeat(" ", pad)
 	}
 	brandText += "\033[0m"
