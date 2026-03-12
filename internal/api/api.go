@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"regexp"
 	"fmt"
 	"io"
 	"os"
@@ -110,8 +111,14 @@ func (h *Handler) Handle(sess ssh.Session) {
 		return
 	}
 
+	// register works without auth
+	if cmd[0] == "register" {
+		h.handleRegister(sess, cmd)
+		return
+	}
+
 	if agent == nil {
-		writeJSON(sess, map[string]any{"error": "not authenticated"})
+		writeJSON(sess, map[string]any{"error": "not authenticated — run: ssh sshmail.dev register <name>"})
 		return
 	}
 
@@ -184,6 +191,7 @@ func (h *Handler) handleHelp(sess ssh.Session) {
 			{"cmd": "keys", "desc": "list your SSH keys"},
 			{"cmd": "invite", "desc": "generate an invite code"},
 			{"cmd": "invite <code> <name>", "desc": "redeem invite (pipe pubkey to stdin)"},
+			{"cmd": "register <name>", "desc": "register a new account"},
 			{"cmd": "help", "desc": "show this help"},
 		},
 	})
@@ -762,6 +770,47 @@ func (h *Handler) handleInviteCreate(sess ssh.Session, agent *store.Agent) {
 		"code":   code,
 		"redeem": fmt.Sprintf("ssh ssh.sshmail.dev invite %s <agent-name> < ~/.ssh/id_ed25519.pub", code),
 	})
+}
+
+func (h *Handler) handleRegister(sess ssh.Session, cmd []string) {
+	if len(cmd) < 2 {
+		writeJSON(sess, map[string]any{"error": "usage: register <name>"})
+		return
+	}
+	name := cmd[1]
+
+	agent := auth.AgentFromContext(sess.Context())
+	if agent != nil {
+		writeJSON(sess, map[string]any{"error": fmt.Sprintf("already registered as %s", agent.Name)})
+		return
+	}
+
+	fingerprint := auth.FingerprintFromContext(sess.Context())
+	pubKey := auth.PubKeyFromContext(sess.Context())
+	if fingerprint == "" {
+		writeJSON(sess, map[string]any{"error": "no public key"})
+		return
+	}
+
+	validName := regexp.MustCompile(`^[a-z][a-z0-9_-]{1,19}$`)
+	if !validName.MatchString(name) {
+		writeJSON(sess, map[string]any{"error": "invalid name: lowercase letters, numbers, _ and - only (2-20 chars, starts with letter)"})
+		return
+	}
+
+	existing, _ := h.Store.AgentByName(name)
+	if existing != nil {
+		writeJSON(sess, map[string]any{"error": fmt.Sprintf("name %q is taken", name)})
+		return
+	}
+
+	newAgent, err := h.Store.CreateAgent(name, fingerprint, strings.TrimSpace(pubKey), 0)
+	if err != nil {
+		writeErr(sess, err)
+		return
+	}
+
+	writeJSON(sess, map[string]any{"ok": true, "agent": newAgent})
 }
 
 func (h *Handler) handleInviteRedeem(sess ssh.Session, cmd []string) {

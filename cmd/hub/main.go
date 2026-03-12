@@ -86,10 +86,52 @@ func main() {
 					// Interactive session with PTY and no command → serve TUI
 					if len(cmd) == 0 && ptyActive {
 						agent := auth.AgentFromContext(sess.Context())
+
+						// New user — run registration
 						if agent == nil {
-							wish.Println(sess, "not authenticated")
-							return
+							fingerprint := auth.FingerprintFromContext(sess.Context())
+							pubKey := auth.PubKeyFromContext(sess.Context())
+							if fingerprint == "" {
+								wish.Println(sess, "no public key")
+								return
+							}
+
+							for {
+								regModel := tui.NewRegisterModel()
+								renderer := bm.MakeRenderer(sess)
+								lipgloss.SetDefaultRenderer(renderer)
+								opts := bm.MakeOptions(sess)
+								opts = append(opts, tea.WithAltScreen())
+								p := tea.NewProgram(regModel, opts...)
+								result, err := p.Run()
+								p.Kill()
+								if err != nil {
+									log.Printf("register TUI error: %v", err)
+									return
+								}
+								reg := result.(tui.RegisterModel)
+								if reg.Quit {
+									return
+								}
+
+								// Check if name is taken
+								existing, _ := db.AgentByName(reg.Name)
+								if existing != nil {
+									wish.Println(sess, fmt.Sprintf("\"%s\" is taken, try another", reg.Name))
+									continue
+								}
+
+								newAgent, err := db.CreateAgent(reg.Name, fingerprint, strings.TrimSpace(pubKey), 0)
+								if err != nil {
+									wish.Println(sess, fmt.Sprintf("error: %v", err))
+									return
+								}
+								agent = newAgent
+								log.Printf("New agent registered: %s", agent.Name)
+								break
+							}
 						}
+
 						backend := &tui.LocalBackend{
 							Store:   db,
 							Agent:   agent,
