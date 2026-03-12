@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -62,7 +63,13 @@ func main() {
 		log.Println("Email notifications enabled (Resend)")
 	}
 
-	handler := &api.Handler{Store: db, DataDir: cfg.DataDir, Events: api.NewHub(), Notifier: emailNotifier}
+	handler := &api.Handler{
+		Store:    db,
+		DataDir:  cfg.DataDir,
+		Events:   api.NewHub(),
+		Notifier: emailNotifier,
+		Limiter:  api.NewRateLimiter(60, time.Minute),
+	}
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	srv, err := wish.NewServer(

@@ -92,6 +92,7 @@ type Handler struct {
 	DataDir  string
 	Events   *Hub
 	Notifier *notify.Notifier // nil means email notifications disabled
+	Limiter  *RateLimiter     // nil disables rate limiting
 }
 
 func (h *Handler) Handle(sess ssh.Session) {
@@ -305,6 +306,11 @@ func (h *Handler) handleSend(sess ssh.Session, cmd []string, agent *store.Agent)
 	// send <agent> <message> [--file <name>]
 	if len(cmd) < 3 {
 		writeJSON(sess, map[string]any{"error": "usage: send <agent> <message> [--file <name>]"})
+		return
+	}
+
+	if h.Limiter != nil && !h.Limiter.Allow(agent.ID) {
+		writeJSON(sess, map[string]any{"error": "rate limit exceeded, try again later"})
 		return
 	}
 
